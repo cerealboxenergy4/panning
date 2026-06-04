@@ -1,0 +1,49 @@
+# Local/editor state
+.claude/
+.cache/
+.venv/
+venv/
+env/
+.env
+.DS_Store
+
+# Python runtime/build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# External dependencies and downloaded assets
+third_party/
+checkpoints/
+data/
+
+# Generated experiment outputs
+outputs/
+outputs_*/
+reports/
+logs/
+
+# Large model/data artifacts
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.onnx
+*.npz
+*.npy
+*.zip
+
+# Local media and generated visualizations
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.mp4
+*.mov
