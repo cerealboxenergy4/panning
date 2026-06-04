@@ -31,6 +31,21 @@ import matplotlib.pyplot as plt
 from matplotlib import colors
 from matplotlib.patches import Rectangle
 
+try:
+    from .exif_utils import compare_exif_metadata, read_image_exif_metadata
+except ImportError:  # pragma: no cover - supports `python pipeline/kernel_estimation.py`
+    from exif_utils import compare_exif_metadata, read_image_exif_metadata
+
+
+PHOTOMETRIC_MODES = (
+    'raw',
+    'patch_affine',
+    'global_affine',
+    'robust_norm',
+    'gradient',
+    'exif_linear',
+)
+
 
 # ── Blur direction (from blurry patch Sobel) ─────────────────────────────────
 
@@ -207,9 +222,171 @@ def patch_structure_metrics(gray_patch, harris_block_size=5, harris_k=0.04):
     }
 
 
+def finite_masked_values(arr, mask=None):
+    vals = np.asarray(arr, dtype=np.float32)
+    if mask is not None:
+        vals = vals[np.asarray(mask, dtype=bool)]
+    vals = vals[np.isfinite(vals)]
+    return vals.reshape(-1)
+
+
+def robust_center_scale(arr, mask=None):
+    vals = finite_masked_values(arr, mask)
+    if vals.size == 0:
+        return 0.0, 1.0
+    center = float(np.median(vals))
+    p5, p95 = np.percentile(vals, [5, 95])
+    scale = float((p95 - p5) / 2.0)
+    if not np.isfinite(scale) or scale < 1e-6:
+        scale = float(np.std(vals))
+    if not np.isfinite(scale) or scale < 1e-6:
+        scale = 1.0
+    return center, scale
+
+
+def robust_normalize(arr, mask=None):
+    center, scale = robust_center_scale(arr, mask)
+    return (np.asarray(arr, dtype=np.float32) - center) / scale
+
+
+def fit_affine(source, target, mask=None):
+    src = np.asarray(source, dtype=np.float64)
+    tgt = np.asarray(target, dtype=np.float64)
+    if mask is not None:
+        keep = np.asarray(mask, dtype=bool) & np.isfinite(src) & np.isfinite(tgt)
+        src = src[keep]
+        tgt = tgt[keep]
+    else:
+        keep = np.isfinite(src) & np.isfinite(tgt)
+        src = src[keep]
+        tgt = tgt[keep]
+    src = src.reshape(-1)
+    tgt = tgt.reshape(-1)
+    if src.size < 2:
+        return 1.0, 0.0
+    src_mean = float(src.mean())
+    tgt_mean = float(tgt.mean())
+    src_z = src - src_mean
+    denom = float(np.dot(src_z, src_z))
+    if denom < 1e-9:
+        return 1.0, tgt_mean - src_mean
+    gain = float(np.dot(src_z, tgt - tgt_mean) / denom)
+    offset = float(tgt_mean - gain * src_mean)
+    return gain, offset
+
+
+def photometric_exposure_ratio(blurry_meta, sharp_meta):
+    b_ev = None if blurry_meta is None else blurry_meta.get('exif_photometric_exposure_value')
+    s_ev = None if sharp_meta is None else sharp_meta.get('exif_photometric_exposure_value')
+    if b_ev is None or s_ev is None or float(s_ev) <= 0:
+        return 1.0, 'missing_exif_photometric_scale'
+    return float(b_ev) / float(s_ev), 'exif_exposure_iso_aperture_ratio'
+
+
+def prepare_photometric_sharp(args, blur_gray, sharp_gray, car_mask, valid_mask):
+    mode = args.photometric_mode
+    bg_mask = (~car_mask) & valid_mask
+    summary = {
+        'mode': mode,
+        'global_gain': 1.0,
+        'global_offset': 0.0,
+        'global_source': 'identity',
+        'blurry_exif': None,
+        'sharp_exif': None,
+        'exif_comparison': None,
+    }
+
+    sharp_work = sharp_gray.astype(np.float32).copy()
+    if args.sharp_image is not None:
+        blurry_exif = read_image_exif_metadata(args.blurry)
+        sharp_exif = read_image_exif_metadata(args.sharp_image)
+        summary['blurry_exif'] = blurry_exif
+        summary['sharp_exif'] = sharp_exif
+        summary['exif_comparison'] = compare_exif_metadata(blurry_exif, sharp_exif)
+    else:
+        blurry_exif = None
+        sharp_exif = None
+
+    if mode == 'global_affine':
+        gain, offset = fit_affine(sharp_work, blur_gray, mask=bg_mask)
+        sharp_work = gain * sharp_work + offset
+        summary.update({
+            'global_gain': gain,
+            'global_offset': offset,
+            'global_source': 'valid_background_affine_fit',
+        })
+    elif mode == 'exif_linear':
+        gain, source = photometric_exposure_ratio(blurry_exif, sharp_exif)
+        sharp_work = gain * sharp_work
+        summary.update({
+            'global_gain': gain,
+            'global_offset': 0.0,
+            'global_source': source,
+        })
+
+    return sharp_work.astype(np.float32), summary
+
+
+def spectral_patches_for_mode(blur_p, sharp_p, mode):
+    if mode == 'robust_norm':
+        return robust_normalize(blur_p), robust_normalize(sharp_p)
+    return blur_p, sharp_p
+
+
+def gradient_stack(arr):
+    arr = np.asarray(arr, dtype=np.float32)
+    return np.stack([sobel(arr, axis=1), sobel(arr, axis=0)], axis=0)
+
+
+def photometric_loss(blur_p, pred_p, mode):
+    blur_p = np.asarray(blur_p, dtype=np.float32)
+    pred_p = np.asarray(pred_p, dtype=np.float32)
+
+    if mode == 'patch_affine':
+        gain, offset = fit_affine(pred_p, blur_p)
+        corrected = gain * pred_p + offset
+        return float(np.mean((blur_p - corrected) ** 2)), gain, offset
+
+    if mode == 'robust_norm':
+        blur_n = robust_normalize(blur_p)
+        pred_n = robust_normalize(pred_p)
+        return float(np.mean((blur_n - pred_n) ** 2)), float('nan'), float('nan')
+
+    if mode == 'gradient':
+        blur_g = gradient_stack(blur_p).reshape(-1)
+        pred_g = gradient_stack(pred_p).reshape(-1)
+        denom = float(np.dot(pred_g, pred_g))
+        gain = float(np.dot(pred_g, blur_g) / denom) if denom > 1e-9 else 1.0
+        residual = blur_g - gain * pred_g
+        return float(np.mean(residual ** 2)), gain, 0.0
+
+    return float(np.mean((blur_p - pred_p) ** 2)), 1.0, 0.0
+
+
+def summarize_patch_losses(valid):
+    vals = np.array([r.get('pixel_loss', np.nan) for r in valid], dtype=float)
+    weights = np.array([max(float(r.get('confidence') or 0.0), 0.0) for r in valid], dtype=float)
+    ok = np.isfinite(vals)
+    if not np.any(ok):
+        return {'pixel_loss_mean': None, 'pixel_loss_weighted_mean': None}
+    vals_ok = vals[ok]
+    weights_ok = weights[ok]
+    if float(weights_ok.sum()) <= 0:
+        weights_ok = np.ones_like(vals_ok)
+    return {
+        'pixel_loss_mean': float(vals_ok.mean()),
+        'pixel_loss_median': float(np.median(vals_ok)),
+        'pixel_loss_weighted_mean': float(np.average(vals_ok, weights=weights_ok)),
+    }
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--blurry', default='pan_1.jpg')
+    p.add_argument('--sharp_image', default=None,
+                   help='Original sharp image used only for EXIF photometric normalization.')
+    p.add_argument('--photometric_mode', choices=PHOTOMETRIC_MODES, default='robust_norm',
+                   help='Photometric mitigation mode for reference-to-blurry intensity mismatch.')
     p.add_argument('--sharp_reg', default=None,
                    help='Registered sharp image; defaults to <out_dir>/sharp_registered.png')
     p.add_argument('--car_mask', default=None,
@@ -262,6 +439,16 @@ def main():
         print(f"[warn] {args.valid_mask} not found — treating all pixels as valid")
         valid_mask = np.ones(blur_gray.shape, dtype=bool)
 
+    sharp_gray_fit, photometric_summary = prepare_photometric_sharp(
+        args, blur_gray, sharp_gray, car_mask, valid_mask
+    )
+    print(
+        f"Photometric mode: {args.photometric_mode} "
+        f"(global gain={photometric_summary['global_gain']:.4f}, "
+        f"offset={photometric_summary['global_offset']:.2f}, "
+        f"source={photometric_summary['global_source']})"
+    )
+
     H, W = blur_gray.shape
     P = args.patch_size
     n_rows, n_cols = H // P, W // P
@@ -284,7 +471,7 @@ def main():
         for col in range(n_cols):
             y0, x0 = row * P, col * P
             blur_p  = blur_gray[y0:y0 + P, x0:x0 + P]
-            sharp_p = sharp_gray[y0:y0 + P, x0:x0 + P]
+            sharp_p = sharp_gray_fit[y0:y0 + P, x0:x0 + P]
             car_p   = car_mask[y0:y0 + P, x0:x0 + P]
             valid_p = valid_mask[y0:y0 + P, x0:x0 + P]
 
@@ -292,6 +479,8 @@ def main():
                        cx=x0 + P / 2.0, cy=y0 + P / 2.0, patch_size=P,
                        car_frac=float(car_p.mean()),
                        b_px=None, b_px_spec=None, b_px_pixel=None,
+                       pixel_loss=None, loss_spec=None, loss_pixel=None,
+                       photo_gain=None, photo_offset=None,
                        phi_deg=global_phi, confidence=None,
                        grad_energy=None, grad_mag_var=None, grad_p95=None,
                        harris_max=None, harris_mean=None, texture_score=None,
@@ -335,26 +524,40 @@ def main():
 
             # Kernel length: spectral fit + parallel pixel-domain fit
             try:
-                b_spec = reference_sinc2_fit(blur_p, sharp_p, global_phi)
+                spec_blur_p, spec_sharp_p = spectral_patches_for_mode(
+                    blur_p, sharp_p, args.photometric_mode
+                )
+                b_spec = reference_sinc2_fit(spec_blur_p, spec_sharp_p, global_phi)
                 sharp_p_aligned = align_perpendicular(blur_p, sharp_p, global_phi)
 
-                def mse(b):
-                    return float(np.mean(
-                        (blur_p - apply_motion_blur(sharp_p_aligned, b, global_phi)) ** 2))
+                def loss_for_b(b):
+                    reblurred = apply_motion_blur(sharp_p_aligned, b, global_phi)
+                    loss, _, _ = photometric_loss(blur_p, reblurred, args.photometric_mode)
+                    return loss
 
                 # Spectral-seeded pixel refinement (narrow bounds around b_spec)
                 res_spec = minimize_scalar(
-                    mse, bounds=(max(1.0, b_spec * 0.5), b_spec * 2.0),
+                    loss_for_b, bounds=(max(1.0, b_spec * 0.5), b_spec * 2.0),
                     method='bounded')
 
                 # Independent pixel-domain estimate (wide bounds, no spectral seed)
                 res_pixel = minimize_scalar(
-                    mse, bounds=(1.0, P * 0.45),
+                    loss_for_b, bounds=(1.0, P * 0.45),
                     method='bounded')
 
+                final_reblurred = apply_motion_blur(sharp_p_aligned, res_pixel.x, global_phi)
+                final_loss, photo_gain, photo_offset = photometric_loss(
+                    blur_p, final_reblurred, args.photometric_mode
+                )
+
                 rec['b_px_spec']  = b_spec
-                rec['b_px']       = res_spec.x   # spectral→pixel (trajectory fitting uses this)
+                rec['b_px']       = res_spec.x   # spectral→pixel diagnostic
                 rec['b_px_pixel'] = res_pixel.x
+                rec['loss_spec'] = float(res_spec.fun)
+                rec['loss_pixel'] = float(res_pixel.fun)
+                rec['pixel_loss'] = float(final_loss)
+                rec['photo_gain'] = None if not np.isfinite(photo_gain) else float(photo_gain)
+                rec['photo_offset'] = None if not np.isfinite(photo_offset) else float(photo_offset)
                 rec['status'] = 'ok'
             except Exception as e:
                 rec['status'] = f'fit_failed:{e}'
@@ -388,6 +591,12 @@ def main():
         print(f"texture_score: mean={tex_arr.mean():.1f}  "
               f"grad_var_mean={grad_var_arr.mean():.1f}  "
               f"harris_max_mean={harris_arr.mean():.1f}")
+        loss_summary = summarize_patch_losses(valid)
+        photometric_summary.update(loss_summary)
+        if loss_summary['pixel_loss_weighted_mean'] is not None:
+            print(f"pixel_loss ({args.photometric_mode}): "
+                  f"w_mean={loss_summary['pixel_loss_weighted_mean']:.3f}  "
+                  f"median={loss_summary['pixel_loss_median']:.3f}")
 
     # ── Save NPZ ──────────────────────────────────────────────────────────────
     npz_path = out_dir / 'kernel_map.npz'
@@ -403,6 +612,12 @@ def main():
         b_px=np.array([r['b_px']       if r['b_px']       is not None else np.nan for r in records]),
         b_px_spec=np.array([r['b_px_spec'] if r['b_px_spec'] is not None else np.nan for r in records]),
         b_px_pixel=np.array([r['b_px_pixel'] if r['b_px_pixel'] is not None else np.nan for r in records]),
+        pixel_loss=np.array([r['pixel_loss'] if r.get('pixel_loss') is not None else np.nan for r in records]),
+        loss_spec=np.array([r['loss_spec'] if r.get('loss_spec') is not None else np.nan for r in records]),
+        loss_pixel=np.array([r['loss_pixel'] if r.get('loss_pixel') is not None else np.nan for r in records]),
+        photo_gain=np.array([r['photo_gain'] if r.get('photo_gain') is not None else np.nan for r in records]),
+        photo_offset=np.array([r['photo_offset'] if r.get('photo_offset') is not None else np.nan for r in records]),
+        photometric_mode=np.array([args.photometric_mode for r in records]),
         phi_deg=np.array([r['phi_deg'] if r['phi_deg'] is not None else np.nan
                           for r in records]),
         confidence=np.array([r['confidence'] if r['confidence'] is not None else 0.0
@@ -428,7 +643,9 @@ def main():
     fields = ['row', 'col', 'x0', 'y0', 'cx', 'cy', 'patch_size',
               'car_frac', 'grad_energy', 'grad_mag_var', 'grad_p95',
               'harris_max', 'harris_mean', 'texture_score',
-              'b_px', 'b_px_spec', 'b_px_pixel', 'phi_deg', 'confidence', 'status']
+              'b_px', 'b_px_spec', 'b_px_pixel', 'pixel_loss', 'loss_spec',
+              'loss_pixel', 'photo_gain', 'photo_offset',
+              'phi_deg', 'confidence', 'status']
     with open(csv_path, 'w', newline='') as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -444,7 +661,7 @@ def main():
     ax.set_xlim(0, W)
     ax.set_ylim(H, 0)
     ax.axis('off')
-    ax.set_title(f'Reference-based kernel estimates | patch={P}px')
+    ax.set_title(f'Reference-based kernel estimates | patch={P}px | photometric={args.photometric_mode}')
 
     b_valid = np.array([r['b_px_pixel'] for r in valid]) if valid else np.array([0.0, 1.0])
     norm = colors.Normalize(vmin=b_valid.min(), vmax=b_valid.max())
@@ -519,7 +736,7 @@ def main():
         for rec in grid_recs:
             y0, x0 = rec['y0'], rec['x0']
             blur_p   = blur_gray[y0:y0 + P, x0:x0 + P]
-            sharp_p  = sharp_gray[y0:y0 + P, x0:x0 + P]
+            sharp_p  = sharp_gray_fit[y0:y0 + P, x0:x0 + P]
             phi_p    = rec['phi_deg']
             b_spec_p = rec['b_px_spec'] if rec['b_px_spec'] is not None else rec['b_px']
             b_pix_p  = rec['b_px_pixel'] if rec['b_px_pixel'] is not None else rec['b_px']
@@ -580,7 +797,7 @@ def main():
 
         print(f"\nUniform kernel: b={global_b:.2f} px  φ={global_phi:.2f}°")
 
-        reblurred_full = apply_motion_blur(sharp_gray, global_b, global_phi)
+        reblurred_full = apply_motion_blur(sharp_gray_fit, global_b, global_phi)
         residual_full  = np.abs(reblurred_full - blur_gray)
 
         B_x = global_b * np.cos(np.radians(global_phi))
@@ -590,6 +807,7 @@ def main():
             'b_total_px': global_b, 'phi_deg': global_phi,
             'n_patches_used': len(valid),
             'method': 'uniform_kernel_weighted_mean',
+            'photometric_mode': args.photometric_mode,
         }
         utraj_path = out_dir / 'uniform_traj.json'
         with open(utraj_path, 'w') as f:
@@ -611,7 +829,17 @@ def main():
         ures_path = out_dir / 'uniform_trajectory_residual.png'
         fig.savefig(ures_path, dpi=120, bbox_inches='tight')
         plt.close(fig)
+        photometric_summary.update({
+            'uniform_b_px': global_b,
+            'uniform_residual_mean': float(residual_full.mean()),
+            'uniform_residual_std': float(residual_full.std()),
+        })
         print(f"Saved: {ures_path}")
+
+    summary_path = out_dir / 'photometric_summary.json'
+    with open(summary_path, 'w') as f:
+        json.dump(photometric_summary, f, indent=2)
+    print(f"Saved: {summary_path}")
 
 
 if __name__ == '__main__':

@@ -42,11 +42,40 @@ def rational_to_float(value: Any) -> float | None:
     return None
 
 
+def iter_ifds(exif):
+    yield exif
+    if not hasattr(exif, 'get_ifd'):
+        return
+
+    ifd_ids = [0x8769, 0x8825, 0xA005]  # Exif, GPS, Interop
+    if hasattr(ExifTags, 'IFD'):
+        for attr in ['Exif', 'GPSInfo', 'Interop']:
+            if hasattr(ExifTags.IFD, attr):
+                ifd_ids.append(getattr(ExifTags.IFD, attr))
+
+    seen = set()
+    for ifd_id in ifd_ids:
+        key = str(ifd_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            nested = exif.get_ifd(ifd_id)
+        except Exception:
+            continue
+        if nested:
+            yield nested
+
+
 def get_exif_value(exif, name: str):
     tag = EXIF_BY_NAME.get(name)
     if tag is None:
         return None
-    return exif.get(tag)
+    for ifd in iter_ifds(exif):
+        value = ifd.get(tag)
+        if value is not None:
+            return value
+    return None
 
 
 def focal_px_from_exif(image: Image.Image, sensor_width_mm: float | None) -> tuple[float | None, dict[str, Any]]:

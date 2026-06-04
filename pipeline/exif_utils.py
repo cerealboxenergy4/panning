@@ -26,11 +26,70 @@ def rational_to_float(value: Any) -> float | None:
     return None
 
 
+def _iter_ifds(exif):
+    yield exif
+    if not hasattr(exif, 'get_ifd'):
+        return
+
+    ifd_ids = [0x8769, 0x8825, 0xA005]  # Exif, GPS, Interop
+    if hasattr(ExifTags, 'IFD'):
+        for attr in ['Exif', 'GPSInfo', 'Interop']:
+            if hasattr(ExifTags.IFD, attr):
+                ifd_ids.append(getattr(ExifTags.IFD, attr))
+
+    seen = set()
+    for ifd_id in ifd_ids:
+        key = str(ifd_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            nested = exif.get_ifd(ifd_id)
+        except Exception:
+            continue
+        if nested:
+            yield nested
+
+
 def get_exif_value(exif, name: str):
     tag = EXIF_BY_NAME.get(name)
     if tag is None:
         return None
-    return exif.get(tag)
+    for ifd in _iter_ifds(exif):
+        value = ifd.get(tag)
+        if value is not None:
+            return value
+    return None
+
+
+def iso_from_exif(exif) -> tuple[float | None, str | None]:
+    for name in ['PhotographicSensitivity', 'ISOSpeedRatings', 'RecommendedExposureIndex']:
+        value = get_exif_value(exif, name)
+        if isinstance(value, (tuple, list)) and value:
+            value = value[0]
+        iso = rational_to_float(value)
+        if iso and iso > 0:
+            return iso, f'exif_{name}'
+    return None, None
+
+
+def aperture_from_exif(exif) -> tuple[float | None, str | None]:
+    f_number = rational_to_float(get_exif_value(exif, 'FNumber'))
+    if f_number and f_number > 0:
+        return f_number, 'exif_f_number'
+
+    aperture_value = rational_to_float(get_exif_value(exif, 'ApertureValue'))
+    if aperture_value is not None:
+        f_number = 2.0 ** (aperture_value / 2.0)
+        if f_number > 0:
+            return f_number, 'exif_aperture_value'
+    return None, None
+
+
+def photometric_exposure_value(exposure_s: float | None, iso: float | None, f_number: float | None) -> float | None:
+    if exposure_s is None or iso is None or f_number is None or f_number <= 0:
+        return None
+    return float(exposure_s) * float(iso) / (float(f_number) ** 2)
 
 
 def _json_value(value: Any):
@@ -69,6 +128,9 @@ def read_image_exif_metadata(path: str | Path, sensor_width_mm: float | None = N
     fp_x = rational_to_float(get_exif_value(exif, 'FocalPlaneXResolution'))
     fp_unit = get_exif_value(exif, 'FocalPlaneResolutionUnit')
     exposure_s, exposure_source = exposure_from_exif(exif)
+    iso, iso_source = iso_from_exif(exif)
+    f_number, f_number_source = aperture_from_exif(exif)
+    exposure_value = photometric_exposure_value(exposure_s, iso, f_number)
 
     meta: dict[str, Any] = {
         'path': str(path),
@@ -83,6 +145,11 @@ def read_image_exif_metadata(path: str | Path, sensor_width_mm: float | None = N
         'exif_focal_35mm': focal_35,
         'exif_exposure_s': exposure_s,
         'exif_exposure_source': exposure_source,
+        'exif_iso': iso,
+        'exif_iso_source': iso_source,
+        'exif_f_number': f_number,
+        'exif_f_number_source': f_number_source,
+        'exif_photometric_exposure_value': exposure_value,
         'exif_focal_plane_x_resolution': fp_x,
         'exif_focal_plane_resolution_unit': _json_value(fp_unit),
         'focal_px': None,
@@ -125,6 +192,10 @@ def read_image_exif_metadata(path: str | Path, sensor_width_mm: float | None = N
         missing.append('focal_px')
     if exposure_s is None:
         missing.append('exposure_s')
+    if iso is None:
+        missing.append('iso')
+    if f_number is None:
+        missing.append('f_number')
     meta['missing_standard_fields'] = missing
     return meta
 
@@ -207,7 +278,11 @@ def compare_exif_metadata(blurry_meta: dict[str, Any], sharp_meta: dict[str, Any
         return None
 
     comparisons: dict[str, Any] = {}
-    for field in ['focal_px', 'exif_focal_mm', 'exif_focal_35mm', 'exif_exposure_s', 'sensor_width_mm', 'width_px', 'height_px']:
+    for field in [
+        'focal_px', 'exif_focal_mm', 'exif_focal_35mm', 'exif_exposure_s',
+        'exif_iso', 'exif_f_number', 'exif_photometric_exposure_value',
+        'sensor_width_mm', 'width_px', 'height_px',
+    ]:
         blurry_val = blurry_meta.get(field)
         sharp_val = sharp_meta.get(field)
         entry = {'blurry': blurry_val, 'sharp': sharp_val}
@@ -221,6 +296,8 @@ def compare_exif_metadata(blurry_meta: dict[str, Any], sharp_meta: dict[str, Any
         warnings.append('standard EXIF focal calibration missing for at least one image')
     if blurry_meta.get('exif_exposure_s') is None or sharp_meta.get('exif_exposure_s') is None:
         warnings.append('standard EXIF exposure missing for at least one image')
+    if blurry_meta.get('exif_photometric_exposure_value') is None or sharp_meta.get('exif_photometric_exposure_value') is None:
+        warnings.append('EXIF exposure/ISO/aperture photometric scale missing for at least one image')
 
     return {
         'blurry_path': blurry_meta.get('path'),

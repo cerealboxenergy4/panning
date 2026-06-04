@@ -140,6 +140,13 @@ spectral fit, because the spectral ratio is sensitive to registration noise and
 JPEG compression artefacts in the frequency domain. `pipeline/trajectory_fitting.py` and
 the uniform trajectory baseline both use `b_px_pixel`.
 
+The default pixel-domain comparison now uses `--photometric_mode robust_norm`,
+which normalizes each patch by robust median/percentile statistics before
+comparing candidate blur lengths. Other modes are available for ablations:
+`raw`, `patch_affine`, `global_affine`, `gradient`, and `exif_linear`. The
+`pan_2`/`sharp_2` comparison is logged in
+`reports/photometric_mitigation_pan_2_sharp_2.md`.
+
 **Auxiliary estimate — spectral sinc² fit (`b_px_spec`)**
 
 Kept for diagnostics and side-by-side comparison in `kernel_patch_grid.png`.
@@ -176,6 +183,7 @@ Outputs:
 - `outputs/pan_1__sharp_1/kernel_map.csv` — same as CSV
 - `outputs/pan_1__sharp_1/kernel_map.png` — overlay: arrows show blur direction, colour encodes `b_px_pixel`
 - `outputs/pan_1__sharp_1/kernel_patch_grid.png` — 8×6 diagnostic grid (4 near-mean + 4 outlier patches)
+- `outputs/pan_1__sharp_1/photometric_summary.json` — selected photometric mode, EXIF comparison, gain/offset, and patch-loss summary
 - `outputs/pan_1__sharp_1/uniform_traj.json` — global `(Bx, By, b, φ)` from weighted mean
 - `outputs/pan_1__sharp_1/uniform_trajectory_residual.png` — blurry | re-blurred | |residual|
 
@@ -188,6 +196,7 @@ Key arguments:
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `--patch_size` | 400 | Patch edge length in pixels |
+| `--photometric_mode` | `robust_norm` | Intensity-mismatch mitigation: `raw`, `patch_affine`, `global_affine`, `robust_norm`, `gradient`, or `exif_linear` |
 | `--grad_energy_thres` | 100 | Min Sobel energy in sharp patch |
 | `--grad_var_thres` | 0 | Min gradient-magnitude variance; 0 disables |
 | `--harris_thres` | 0 | Min max Harris corner response; 0 disables |
@@ -355,6 +364,7 @@ Paths are relative to a run directory such as `outputs/pan_1__sharp_1/`.
 | `kernel_map.npz` | 3 | Per-patch kernel estimates |
 | `kernel_map.png` | 3 | Kernel map overlay |
 | `kernel_patch_grid.png` | 3 | Patch diagnostic grid (spectral vs pixel) |
+| `photometric_summary.json` | 3 | Photometric mode and intensity-normalization summary |
 | `uniform_traj.json` | 3 | Single-kernel baseline |
 | `uniform_trajectory_residual.png` | 3 | Baseline residual image |
 | `trajectory.json` | 4 | Fitted B, φ, ω |

@@ -168,6 +168,12 @@ def main() -> int:
     parser.add_argument("--harris_k", type=float, default=0.04)
     parser.add_argument("--global_phi", type=float, default=None, help="Override blur direction.")
     parser.add_argument(
+        "--photometric_mode",
+        choices=["raw", "patch_affine", "global_affine", "robust_norm", "gradient", "exif_linear"],
+        default="robust_norm",
+        help="Photometric mitigation mode used during reference-based kernel estimation.",
+    )
+    parser.add_argument(
         "--weight_field",
         default="confidence",
         help="Kernel-map field used as trajectory fitting weights.",
@@ -317,6 +323,10 @@ def main() -> int:
                 str(blurry),
                 "--sharp_reg",
                 str(sharp_reg),
+                "--sharp_image",
+                str(sharp),
+                "--photometric_mode",
+                str(args.photometric_mode),
                 "--car_mask",
                 str(car_mask),
                 "--valid_mask",
@@ -341,6 +351,7 @@ def main() -> int:
                 kernel_map,
                 out_dir / "kernel_map.csv",
                 out_dir / "kernel_map.png",
+                out_dir / "photometric_summary.json",
                 out_dir / "uniform_traj.json",
                 out_dir / "uniform_trajectory_residual.png",
             ],
