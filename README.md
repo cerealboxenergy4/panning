@@ -10,6 +10,8 @@ we can extract that kernel without any deconvolution.
 
 ---
 
+![Final speed estimation example](outputs/pan_2__sharp_2/final_result.png)
+
 ## Pipeline Overview
 
 ```
