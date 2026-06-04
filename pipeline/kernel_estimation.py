@@ -7,13 +7,13 @@ For each background patch (non-car, non-flat):
   3. Fit sinc²(b·fx) to the ratio  P_blurry(fx) / P_sharp(fx)  → kernel length b.
      This avoids the isotropy assumption of the blind approach: we just divide the
      blurry marginal spectrum by the sharp marginal spectrum directly.
-  4. Confidence weight = gradient energy of the sharp reference patch
-     (high texture → well-conditioned kernel estimate).
+  4. Confidence weight = sharp-patch texture score: Sobel energy plus
+     gradient-magnitude variance (high texture → well-conditioned estimate).
 
 Outputs:
-  outputs/kernel_map.npz  — per-patch arrays: b_px, phi_deg, confidence, status
-  outputs/kernel_map.csv  — same as CSV for inspection
-  outputs/kernel_map.png  — overlay visualization
+  outputs/<blurry_stem>/kernel_map.npz  — per-patch arrays: b_px, phi_deg, confidence, texture metrics, status
+  outputs/<blurry_stem>/kernel_map.csv  — same as CSV for inspection
+  outputs/<blurry_stem>/kernel_map.png  — overlay visualization
 """
 
 import argparse
@@ -22,7 +22,7 @@ import json
 import numpy as np
 from pathlib import Path
 from PIL import Image, ImageOps
-from scipy.ndimage import sobel, rotate as nd_rotate, uniform_filter1d, median_filter, shift as nd_shift
+from scipy.ndimage import sobel, rotate as nd_rotate, uniform_filter1d, uniform_filter, median_filter, shift as nd_shift
 from scipy.signal import find_peaks
 from scipy.optimize import curve_fit, minimize_scalar
 import matplotlib
@@ -172,29 +172,84 @@ def load_gray_rgb(path):
     return rgb, gray
 
 
+def patch_structure_metrics(gray_patch, harris_block_size=5, harris_k=0.04):
+    """Return texture metrics from the registered sharp patch.
+
+    Gradient energy measures how much signal is available; gradient-magnitude
+    variance favors high-contrast, non-uniform structure over flat or repetitive
+    regions. The Harris score is optional at selection time, but always saved so
+    weak-corner patches can be inspected after a run.
+    """
+    gx = sobel(gray_patch, axis=1)
+    gy = sobel(gray_patch, axis=0)
+    grad_sq = gx ** 2 + gy ** 2
+    grad_mag = np.sqrt(grad_sq)
+
+    block = max(1, int(harris_block_size))
+    ix2 = uniform_filter(gx * gx, size=block, mode='reflect')
+    iy2 = uniform_filter(gy * gy, size=block, mode='reflect')
+    ixy = uniform_filter(gx * gy, size=block, mode='reflect')
+    det = ix2 * iy2 - ixy ** 2
+    trace = ix2 + iy2
+    harris = det - harris_k * trace ** 2
+    harris_pos = harris[harris > 0]
+
+    grad_energy = float(np.mean(grad_sq))
+    grad_mag_var = float(np.var(grad_mag))
+    texture_score = grad_energy + grad_mag_var
+    return {
+        'grad_energy': grad_energy,
+        'grad_mag_var': grad_mag_var,
+        'grad_p95': float(np.percentile(grad_mag, 95)),
+        'harris_max': float(harris_pos.max()) if harris_pos.size else 0.0,
+        'harris_mean': float(harris_pos.mean()) if harris_pos.size else 0.0,
+        'texture_score': float(texture_score),
+    }
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--blurry', default='pan_1.jpg')
-    p.add_argument('--sharp_reg', default='outputs/sharp_registered.png')
-    p.add_argument('--car_mask', default='outputs/car_mask.png')
+    p.add_argument('--sharp_reg', default=None,
+                   help='Registered sharp image; defaults to <out_dir>/sharp_registered.png')
+    p.add_argument('--car_mask', default=None,
+                   help='Car mask path; defaults to <out_dir>/car_mask.png')
     p.add_argument('--patch_size', type=int, default=400)
     p.add_argument('--peak_thres', type=float, default=2.5,
                    help='Min peak/mean Sobel histogram ratio (direction confidence)')
     p.add_argument('--grad_energy_thres', type=float, default=100.0,
                    help='Min mean squared Sobel gradient in *sharp* patch (identifiability)')
-    p.add_argument('--valid_mask', default='outputs/sharp_registered_valid.png',
-                   help='Validity mask from register_reference.py (white=covered)')
+    p.add_argument('--grad_var_thres', type=float, default=0.0,
+                   help='Min variance of sharp-patch gradient magnitudes; 0 disables this gate')
+    p.add_argument('--harris_thres', type=float, default=0.0,
+                   help='Min max Harris corner response in sharp patch; 0 disables this gate')
+    p.add_argument('--harris_block_size', type=int, default=5,
+                   help='Window size used for Harris corner response')
+    p.add_argument('--harris_k', type=float, default=0.04,
+                   help='Harris corner detector k parameter')
+    p.add_argument('--valid_mask', default=None,
+                   help='Validity mask from register_reference.py; defaults to <out_dir>/sharp_registered_valid.png')
     p.add_argument('--car_overlap_thres', type=float, default=0.10,
                    help='Skip patch if >this fraction overlaps car mask')
     p.add_argument('--valid_thres', type=float, default=0.95,
                    help='Skip patch if <this fraction is covered by the registered sharp image')
     p.add_argument('--global_phi', type=float, default=None,
                    help='Override blur direction in degrees; skips the pre-pass direction estimate')
-    p.add_argument('--out_dir', default='outputs')
+    p.add_argument('--output_root', default='outputs',
+                   help='Parent directory for per-image output subdirectories')
+    p.add_argument('--out_dir', default=None,
+                   help='Explicit output directory; defaults to <output_root>/<blurry_stem>')
     args = p.parse_args()
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(exist_ok=True)
+    blurry_path = Path(args.blurry)
+    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(args.output_root) / blurry_path.stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if args.sharp_reg is None:
+        args.sharp_reg = str(out_dir / 'sharp_registered.png')
+    if args.car_mask is None:
+        args.car_mask = str(out_dir / 'car_mask.png')
+    if args.valid_mask is None:
+        args.valid_mask = str(out_dir / 'sharp_registered_valid.png')
 
     blur_rgb, blur_gray = load_gray_rgb(args.blurry)
     _, sharp_gray = load_gray_rgb(args.sharp_reg)
@@ -238,6 +293,8 @@ def main():
                        car_frac=float(car_p.mean()),
                        b_px=None, b_px_spec=None, b_px_pixel=None,
                        phi_deg=global_phi, confidence=None,
+                       grad_energy=None, grad_mag_var=None, grad_p95=None,
+                       harris_max=None, harris_mean=None, texture_score=None,
                        status='pending')
 
             # Skip car patches
@@ -252,14 +309,27 @@ def main():
                 records.append(rec)
                 continue
 
-            # Identifiability: gradient energy of sharp reference
-            gx = sobel(sharp_p, axis=1)
-            gy = sobel(sharp_p, axis=0)
-            grad_energy = float(np.mean(gx ** 2 + gy ** 2))
-            rec['confidence'] = grad_energy
+            # Identifiability: structural content of the registered sharp reference.
+            metrics = patch_structure_metrics(
+                sharp_p,
+                harris_block_size=args.harris_block_size,
+                harris_k=args.harris_k,
+            )
+            rec.update(metrics)
+            rec['confidence'] = metrics['texture_score']
 
-            if grad_energy < args.grad_energy_thres:
+            if metrics['grad_energy'] < args.grad_energy_thres:
                 rec['status'] = 'skip_flat_sharp'
+                records.append(rec)
+                continue
+
+            if metrics['grad_mag_var'] < args.grad_var_thres:
+                rec['status'] = 'skip_low_texture'
+                records.append(rec)
+                continue
+
+            if args.harris_thres > 0 and metrics['harris_max'] < args.harris_thres:
+                rec['status'] = 'skip_no_corner'
                 records.append(rec)
                 continue
 
@@ -300,6 +370,9 @@ def main():
         b_pixel_arr = np.array([r['b_px_pixel'] for r in valid])
         phi_arr = np.array([r['phi_deg'] for r in valid])
         w_arr = np.array([r['confidence'] for r in valid])
+        tex_arr = np.array([r['texture_score'] for r in valid])
+        grad_var_arr = np.array([r['grad_mag_var'] for r in valid])
+        harris_arr = np.array([r['harris_max'] for r in valid])
         w_arr_n = w_arr / w_arr.sum()
         print(f"b_px_pixel (used downstream): mean={b_pixel_arr.mean():.1f}  "
               f"std={b_pixel_arr.std():.1f}  "
@@ -312,6 +385,9 @@ def main():
               f"w_mean={float(np.dot(w_arr_n, b_spec_arr)):.1f}")
         print(f"phi_deg: mean={phi_arr.mean():.2f}  std={phi_arr.std():.2f}  "
               f"w_mean={float(np.dot(w_arr_n, phi_arr)):.2f}")
+        print(f"texture_score: mean={tex_arr.mean():.1f}  "
+              f"grad_var_mean={grad_var_arr.mean():.1f}  "
+              f"harris_max_mean={harris_arr.mean():.1f}")
 
     # ── Save NPZ ──────────────────────────────────────────────────────────────
     npz_path = out_dir / 'kernel_map.npz'
@@ -330,6 +406,18 @@ def main():
                           for r in records]),
         confidence=np.array([r['confidence'] if r['confidence'] is not None else 0.0
                              for r in records]),
+        grad_energy=np.array([r['grad_energy'] if r['grad_energy'] is not None else 0.0
+                              for r in records]),
+        grad_mag_var=np.array([r['grad_mag_var'] if r['grad_mag_var'] is not None else 0.0
+                               for r in records]),
+        grad_p95=np.array([r['grad_p95'] if r['grad_p95'] is not None else 0.0
+                           for r in records]),
+        harris_max=np.array([r['harris_max'] if r['harris_max'] is not None else 0.0
+                             for r in records]),
+        harris_mean=np.array([r['harris_mean'] if r['harris_mean'] is not None else 0.0
+                              for r in records]),
+        texture_score=np.array([r['texture_score'] if r['texture_score'] is not None else 0.0
+                                for r in records]),
         car_frac=np.array([r['car_frac'] for r in records]),
         status=np.array([r['status'] for r in records]))
     print(f"Saved: {npz_path}")
@@ -337,7 +425,9 @@ def main():
     # ── Save CSV ──────────────────────────────────────────────────────────────
     csv_path = out_dir / 'kernel_map.csv'
     fields = ['row', 'col', 'x0', 'y0', 'cx', 'cy', 'patch_size',
-              'car_frac', 'b_px', 'b_px_spec', 'b_px_pixel', 'phi_deg', 'confidence', 'status']
+              'car_frac', 'grad_energy', 'grad_mag_var', 'grad_p95',
+              'harris_max', 'harris_mean', 'texture_score',
+              'b_px', 'b_px_spec', 'b_px_pixel', 'phi_deg', 'confidence', 'status']
     with open(csv_path, 'w', newline='') as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -365,6 +455,8 @@ def main():
         'skip_car': 'red',
         'skip_invalid_region': 'magenta',
         'skip_flat_sharp': '0.4',
+        'skip_low_texture': '0.55',
+        'skip_no_corner': 'cyan',
         'skip_no_gradient': '0.4',
         'skip_low_peak': '0.6',
     }

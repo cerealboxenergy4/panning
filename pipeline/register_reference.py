@@ -10,9 +10,9 @@ those 3D points into the blurry camera. This writes comparison artifacts without
 replacing the homography output used by the rest of the pipeline.
 
 Outputs:
-  outputs/sharp_registered.png   - homography-warped sharp reference
-  outputs/homography.npy         - 3x3 homography matrix H (maps sharp -> blurry)
-  outputs/registration_debug.png - inlier match visualization
+  outputs/<blurry_stem>/sharp_registered.png   - homography-warped sharp reference
+  outputs/<blurry_stem>/homography.npy         - 3x3 homography matrix H (maps sharp -> blurry)
+  outputs/<blurry_stem>/registration_debug.png - inlier match visualization
 """
 
 import argparse
@@ -436,8 +436,12 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--blurry', default='pan_1.jpg')
     p.add_argument('--sharp', default='sharp_1.jpg')
-    p.add_argument('--car_mask', default='outputs/car_mask.png')
-    p.add_argument('--out_dir', default='outputs')
+    p.add_argument('--car_mask', default=None,
+                   help='Car mask path; defaults to <out_dir>/car_mask.png')
+    p.add_argument('--output_root', default='outputs',
+                   help='Parent directory for per-image output subdirectories')
+    p.add_argument('--out_dir', default=None,
+                   help='Explicit output directory; defaults to <output_root>/<blurry_stem>')
     p.add_argument(
         '--matcher',
         choices=['loftr', 'sift', 'orb'],
@@ -480,8 +484,11 @@ def main():
         device = 'cpu'
     print(f'Device: {device}')
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(exist_ok=True)
+    blurry_path = Path(args.blurry)
+    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(args.output_root) / blurry_path.stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if args.car_mask is None:
+        args.car_mask = str(out_dir / 'car_mask.png')
 
     # Load images.
     blur_rgb, _, blur_small, (H_b, W_b), (h_b, w_b) = load_rgb_gray(args.blurry, args.long_side)

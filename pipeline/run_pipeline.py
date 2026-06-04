@@ -20,7 +20,7 @@ class Stage:
     outputs: list[Path]
 
 
-STAGE_KEYS = ("segment", "register", "kernel", "trajectory")
+STAGE_KEYS = ("segment", "register", "kernel", "trajectory", "speed")
 
 
 def existing(paths: list[Path]) -> bool:
@@ -85,20 +85,37 @@ def print_summary(out_dir: Path) -> None:
         flush=True,
     )
 
+    speed_path = out_dir / "car_speed.json"
+    if speed_path.exists():
+        with speed_path.open() as f:
+            speed = json.load(f)
+        print(f"car_speed_km_h: {speed.get('speed_km_h', float('nan')):.1f}", flush=True)
+        print(f"car_depth_m: {speed.get('depth_m', float('nan')):.2f}", flush=True)
+        print(f"wheelbase_px: {speed.get('wheelbase_px', float('nan')):.1f}", flush=True)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run segmentation, registration, kernel estimation, and trajectory fitting."
+        description="Run segmentation, registration, kernel estimation, trajectory fitting, and car-speed estimation."
     )
     parser.add_argument("--blurry", default="pan_1.jpg", help="Panning/blurry image.")
     parser.add_argument("--sharp", default="sharp_1.jpg", help="Sharp reference image.")
-    parser.add_argument("--out_dir", default="outputs", help="Directory for all stage outputs.")
+    parser.add_argument(
+        "--output_root",
+        default="outputs",
+        help="Parent directory for per-input output subdirectories.",
+    )
+    parser.add_argument(
+        "--out_dir",
+        default=None,
+        help="Explicit output directory override; defaults to <output_root>/<blurry_stem>.",
+    )
     parser.add_argument("--gpu", default="4", help="Physical GPU id exposed to child processes.")
     parser.add_argument("--cpu", action="store_true", help="Run child processes without CUDA.")
     parser.add_argument("--force", action="store_true", help="Rerun stages even if outputs exist.")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them.")
     parser.add_argument("--start-at", choices=STAGE_KEYS, default="segment")
-    parser.add_argument("--stop-after", choices=STAGE_KEYS, default="trajectory")
+    parser.add_argument("--stop-after", choices=STAGE_KEYS, default="speed")
 
     parser.add_argument(
         "--matcher",
@@ -131,42 +148,85 @@ def main() -> int:
         default=100.0,
         help="Minimum sharp-patch Sobel energy for kernel estimation.",
     )
+    parser.add_argument(
+        "--grad_var_thres",
+        type=float,
+        default=0.0,
+        help="Minimum variance of sharp-patch gradient magnitudes; 0 disables this gate.",
+    )
+    parser.add_argument(
+        "--harris_thres",
+        type=float,
+        default=0.0,
+        help="Minimum max Harris response per patch; 0 disables this gate.",
+    )
+    parser.add_argument("--harris_block_size", type=int, default=5)
+    parser.add_argument("--harris_k", type=float, default=0.04)
     parser.add_argument("--global_phi", type=float, default=None, help="Override blur direction.")
-    parser.add_argument("--outlier_sigma", type=float, default=2.5, help="Trajectory outlier cutoff.")
+    parser.add_argument(
+        "--weight_field",
+        default="confidence",
+        help="Kernel-map field used as trajectory fitting weights.",
+    )
+    parser.add_argument(
+        "--disable_ransac",
+        action="store_true",
+        help="Use sigma-clipped WLS instead of weighted RANSAC for trajectory fitting.",
+    )
+    parser.add_argument("--ransac_iters", type=int, default=256)
+    parser.add_argument("--ransac_min_samples", type=int, default=3)
+    parser.add_argument("--ransac_residual_thres", type=float, default=15.0)
+    parser.add_argument("--ransac_seed", type=int, default=0)
+    parser.add_argument("--outlier_sigma", type=float, default=2.5, help="Fallback WLS sigma cutoff.")
+    parser.add_argument("--wheelbase_mm", type=float, default=3400.0, help="Known car wheelbase in millimeters.")
+    parser.add_argument("--wheelbase_px", type=float, default=None, help="Manual wheel-center distance in pixels.")
+    parser.add_argument("--left_wheel", nargs=2, type=float, default=None, metavar=("X", "Y"))
+    parser.add_argument("--right_wheel", nargs=2, type=float, default=None, metavar=("X", "Y"))
+    parser.add_argument("--wheel_text_prompt", default="wheel . tire . car wheel . racing wheel .")
+    parser.add_argument("--wheel_box_threshold", type=float, default=0.18)
+    parser.add_argument("--wheel_text_threshold", type=float, default=0.15)
+    parser.add_argument("--wheelbase_bbox_ratio_prior", type=float, default=0.50)
+    parser.add_argument("--speed_focal_px", type=float, default=None, help="Manual focal length in pixels for speed estimation.")
+    parser.add_argument("--speed_focal_mm", type=float, default=None, help="Manual focal length in mm for speed estimation.")
+    parser.add_argument("--speed_sensor_width_mm", type=float, default=None, help="Sensor width in mm for speed estimation.")
     args = parser.parse_args()
 
     blurry = Path(args.blurry)
     sharp = Path(args.sharp)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(args.output_root) / blurry.stem
+    if not args.dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
     check_inputs([blurry, sharp])
 
     car_mask = out_dir / "car_mask.png"
+    car_detection_json = out_dir / "car_detection.json"
     sharp_reg = out_dir / "sharp_registered.png"
     valid_mask = out_dir / "sharp_registered_valid.png"
     kernel_map = out_dir / "kernel_map.npz"
+    trajectory_json = out_dir / "trajectory.json"
 
     py = sys.executable
+    script_dir = Path(__file__).resolve().parent
     stages = [
         Stage(
             key="segment",
             label="Stage 1: car segmentation",
             command=[
                 py,
-                "segment_car.py",
+                str(script_dir / "segment_car.py"),
                 "--image",
                 str(blurry),
                 "--out_dir",
                 str(out_dir),
             ],
-            outputs=[car_mask, out_dir / "car_detection.png"],
+            outputs=[car_mask, out_dir / "car_detection.png", car_detection_json],
         ),
         Stage(
             key="register",
             label="Stage 2: reference registration",
             command=[
                 py,
-                "register_reference.py",
+                str(script_dir / "register_reference.py"),
                 "--blurry",
                 str(blurry),
                 "--sharp",
@@ -230,7 +290,7 @@ def main() -> int:
             label="Stage 3: kernel estimation",
             command=[
                 py,
-                "kernel_estimation.py",
+                str(script_dir / "kernel_estimation.py"),
                 "--blurry",
                 str(blurry),
                 "--sharp_reg",
@@ -245,6 +305,14 @@ def main() -> int:
                 str(args.patch_size),
                 "--grad_energy_thres",
                 str(args.grad_energy_thres),
+                "--grad_var_thres",
+                str(args.grad_var_thres),
+                "--harris_thres",
+                str(args.harris_thres),
+                "--harris_block_size",
+                str(args.harris_block_size),
+                "--harris_k",
+                str(args.harris_k),
             ]
             + ([] if args.global_phi is None else ["--global_phi", str(args.global_phi)]),
             outputs=[
@@ -260,7 +328,7 @@ def main() -> int:
             label="Stage 4: trajectory fitting",
             command=[
                 py,
-                "trajectory_fitting.py",
+                str(script_dir / "trajectory_fitting.py"),
                 "--kernel_map",
                 str(kernel_map),
                 "--sharp_reg",
@@ -271,11 +339,60 @@ def main() -> int:
                 str(out_dir),
                 "--outlier_sigma",
                 str(args.outlier_sigma),
-            ],
+                "--weight_field",
+                str(args.weight_field),
+                "--ransac_iters",
+                str(args.ransac_iters),
+                "--ransac_min_samples",
+                str(args.ransac_min_samples),
+                "--ransac_residual_thres",
+                str(args.ransac_residual_thres),
+                "--ransac_seed",
+                str(args.ransac_seed),
+            ]
+            + (["--disable_ransac"] if args.disable_ransac else []),
             outputs=[
-                out_dir / "trajectory.json",
+                trajectory_json,
                 out_dir / "trajectory_residual.png",
                 out_dir / "trajectory_scatter.png",
+            ],
+        ),
+        Stage(
+            key="speed",
+            label="Stage 5: car speed estimation",
+            command=[
+                py,
+                str(script_dir / "estimate_car_speed.py"),
+                "--image",
+                str(blurry),
+                "--car_mask",
+                str(car_mask),
+                "--car_detection_json",
+                str(car_detection_json),
+                "--trajectory",
+                str(trajectory_json),
+                "--out_dir",
+                str(out_dir),
+                "--wheelbase_mm",
+                str(args.wheelbase_mm),
+                "--wheel_text_prompt",
+                str(args.wheel_text_prompt),
+                "--wheel_box_threshold",
+                str(args.wheel_box_threshold),
+                "--wheel_text_threshold",
+                str(args.wheel_text_threshold),
+                "--wheelbase_bbox_ratio_prior",
+                str(args.wheelbase_bbox_ratio_prior),
+            ]
+            + ([] if args.wheelbase_px is None else ["--wheelbase_px", str(args.wheelbase_px)])
+            + ([] if args.left_wheel is None else ["--left_wheel", *(str(v) for v in args.left_wheel)])
+            + ([] if args.right_wheel is None else ["--right_wheel", *(str(v) for v in args.right_wheel)])
+            + ([] if args.speed_focal_px is None else ["--focal_px", str(args.speed_focal_px)])
+            + ([] if args.speed_focal_mm is None else ["--focal_mm", str(args.speed_focal_mm)])
+            + ([] if args.speed_sensor_width_mm is None else ["--sensor_width_mm", str(args.speed_sensor_width_mm)]),
+            outputs=[
+                out_dir / "car_speed.json",
+                out_dir / "car_speed_wheels.png",
             ],
         ),
     ]
@@ -300,7 +417,7 @@ def main() -> int:
     for stage in chosen:
         print(f"{stage.key}: {status_by_stage[stage.key]}", flush=True)
 
-    if not args.dry_run and any(stage.key == "trajectory" for stage in chosen):
+    if not args.dry_run and any(stage.key in {"trajectory", "speed"} for stage in chosen):
         print_summary(out_dir)
     return 0
 

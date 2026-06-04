@@ -1,0 +1,51 @@
+{
+  "image": "pan_1.jpg",
+  "image_width": 4000,
+  "image_height": 6000,
+  "text_prompt": "formula 1 racing car . f1 car . race car .",
+  "box_threshold": 0.3,
+  "text_threshold": 0.25,
+  "car_bbox_source": "grounding_dino_union",
+  "car_bbox_xyxy": [
+    393.9777526855469,
+    3445.15234375,
+    2009.6287841796875,
+    4131.83056640625
+  ],
+  "primary_detection_index": 0,
+  "detections": [
+    {
+      "index": 0,
+      "label": "racing car f1 car car",
+      "score": 0.5210253000259399,
+      "box_xyxy": [
+        516.8336791992188,
+        3611.420166015625,
+        1843.6302490234375,
+        3955.901123046875
+      ]
+    },
+    {
+      "index": 1,
+      "label": "formula 1 racing car race car",
+      "score": 0.3429797887802124,
+      "box_xyxy": [
+        442.7912902832031,
+        3503.4638671875,
+        1943.7666015625,
+        4062.98193359375
+      ]
+    },
+    {
+      "index": 2,
+      "label": "formula racing car race car",
+      "score": 0.3193911910057068,
+      "box_xyxy": [
+        393.9777526855469,
+        3445.15234375,
+        2009.6287841796875,
+        4131.83056640625
+      ]
+    }
+  ]
+}

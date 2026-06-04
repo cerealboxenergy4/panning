@@ -1,0 +1,8 @@
+{
+  "B_x_px": 139.42442259638653,
+  "B_y_px": 0.6083576687617853,
+  "b_total_px": 139.42574982903596,
+  "phi_deg": 0.25,
+  "n_patches_used": 49,
+  "method": "uniform_kernel_weighted_mean"
+}

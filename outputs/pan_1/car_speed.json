@@ -1,0 +1,373 @@
+{
+  "speed_m_s": 69.83710989438576,
+  "speed_km_h": 251.41359561978874,
+  "speed_mph": 156.22116565494292,
+  "depth_m": 34.222626943651576,
+  "omega_rad_s": 2.0406706361079276,
+  "omega_deg_s": 116.92181482526128,
+  "wheelbase_mm": 3400.0,
+  "wheelbase_px": 786.3405209127104,
+  "focal_px": 7914.893617021277,
+  "exif_focal_mm": null,
+  "exif_focal_35mm": null,
+  "exif_focal_plane_x_resolution": null,
+  "exif_focal_plane_resolution_unit": null,
+  "focal_source": "trajectory_json_fallback",
+  "focal_mm": 31.0,
+  "sensor_width_mm": 23.5,
+  "wheel_detection": {
+    "method": "grounding_dino_sam2_in_stage1_car_bbox",
+    "car_bbox_source": "grounding_dino_union",
+    "car_detection_json": "outputs/pan_1/car_detection.json",
+    "stage1_text_prompt": "formula 1 racing car . f1 car . race car .",
+    "stage1_detections": [
+      {
+        "index": 0,
+        "label": "racing car f1 car car",
+        "score": 0.5210253000259399,
+        "box_xyxy": [
+          516.8336791992188,
+          3611.420166015625,
+          1843.6302490234375,
+          3955.901123046875
+        ]
+      },
+      {
+        "index": 1,
+        "label": "formula 1 racing car race car",
+        "score": 0.3429797887802124,
+        "box_xyxy": [
+          442.7912902832031,
+          3503.4638671875,
+          1943.7666015625,
+          4062.98193359375
+        ]
+      },
+      {
+        "index": 2,
+        "label": "formula racing car race car",
+        "score": 0.3193911910057068,
+        "box_xyxy": [
+          393.9777526855469,
+          3445.15234375,
+          2009.6287841796875,
+          4131.83056640625
+        ]
+      }
+    ],
+    "wheel_text_prompt": "wheel . tire . car wheel . racing wheel .",
+    "wheel_box_threshold": 0.18,
+    "wheel_text_threshold": 0.15,
+    "car_crop_xyxy": [
+      393,
+      3445,
+      2010,
+      4132
+    ],
+    "raw_candidate_count": 8,
+    "candidate_count": 4,
+    "raw_candidates": [
+      {
+        "index": 0,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.3295036852359772,
+        "box_crop_xyxy": [
+          1195.8326416015625,
+          327.9821472167969,
+          1375.425048828125,
+          508.2606506347656
+        ],
+        "box_xyxy": [
+          1588.8326416015625,
+          3772.982147216797,
+          1768.425048828125,
+          3953.2606506347656
+        ],
+        "x": 1676.095573700043,
+        "y": 3866.07202406532,
+        "radius_px": 86.06434250894391,
+        "mask_area_px": 23270.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 1,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.3490968346595764,
+        "box_crop_xyxy": [
+          404.0159606933594,
+          282.2676696777344,
+          593.9581909179688,
+          467.1869201660156
+        ],
+        "box_xyxy": [
+          797.0159606933594,
+          3727.2676696777344,
+          986.9581909179688,
+          3912.1869201660156
+        ],
+        "x": 890.951166951289,
+        "y": 3822.7168008457347,
+        "radius_px": 88.4788864125456,
+        "mask_area_px": 24594.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 2,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.3206627368927002,
+        "box_crop_xyxy": [
+          301.16070556640625,
+          206.81065368652344,
+          467.259765625,
+          290.54388427734375
+        ],
+        "box_xyxy": [
+          694.1607055664062,
+          3651.8106536865234,
+          860.259765625,
+          3735.5438842773438
+        ],
+        "x": 772.5754989180091,
+        "y": 3694.062515027651,
+        "radius_px": 51.455822151402565,
+        "mask_area_px": 8318.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 3,
+        "label": "wheel car wheel racing wheel",
+        "score": 0.3138241767883301,
+        "box_crop_xyxy": [
+          126.8556137084961,
+          188.00271606445312,
+          1453.660400390625,
+          510.4586181640625
+        ],
+        "box_xyxy": [
+          519.8556137084961,
+          3633.002716064453,
+          1846.660400390625,
+          3955.4586181640625
+        ],
+        "x": 1227.1209615955459,
+        "y": 3791.526434651456,
+        "radius_px": 281.69619231772003,
+        "mask_area_px": 249294.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 4,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.24804696440696716,
+        "box_crop_xyxy": [
+          1168.60986328125,
+          309.3831481933594,
+          1403.4815673828125,
+          527.1351318359375
+        ],
+        "box_xyxy": [
+          1561.60986328125,
+          3754.3831481933594,
+          1796.4815673828125,
+          3972.1351318359375
+        ],
+        "x": 1674.7784569634891,
+        "y": 3866.4558483396663,
+        "radius_px": 87.78905947942454,
+        "mask_area_px": 24212.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 5,
+        "label": "wheel car wheel racing wheel",
+        "score": 0.22426600754261017,
+        "box_crop_xyxy": [
+          384.3771667480469,
+          263.3308410644531,
+          624.1949462890625,
+          490.6106872558594
+        ],
+        "box_xyxy": [
+          777.3771667480469,
+          3708.330841064453,
+          1017.1949462890625,
+          3935.6106872558594
+        ],
+        "x": 890.631745029978,
+        "y": 3821.814886399495,
+        "radius_px": 89.83202232239604,
+        "mask_area_px": 25352.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 6,
+        "label": "wheel car wheel racing wheel",
+        "score": 0.18738912045955658,
+        "box_crop_xyxy": [
+          287.5723876953125,
+          188.74746704101562,
+          481.5565490722656,
+          309.034423828125
+        ],
+        "box_xyxy": [
+          680.5723876953125,
+          3633.7474670410156,
+          874.5565490722656,
+          3754.034423828125
+        ],
+        "x": 772.6504055343512,
+        "y": 3694.0421040076335,
+        "radius_px": 51.65955948094119,
+        "mask_area_px": 8384.0,
+        "source": "grounding_dino_sam2"
+      },
+      {
+        "index": 7,
+        "label": "car racing",
+        "score": 0.1819658875465393,
+        "box_crop_xyxy": [
+          111.33273315429688,
+          127.4455795288086,
+          1486.9017333984375,
+          564.6544799804688
+        ],
+        "box_xyxy": [
+          504.3327331542969,
+          3572.4455795288086,
+          1879.9017333984375,
+          4009.6544799804688
+        ],
+        "x": 1223.1105326329846,
+        "y": 3792.862355225021,
+        "radius_px": 287.188015591173,
+        "mask_area_px": 259109.0,
+        "source": "grounding_dino_sam2"
+      }
+    ],
+    "candidates": [
+      {
+        "index": 1,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.3490968346595764,
+        "box_crop_xyxy": [
+          404.0159606933594,
+          282.2676696777344,
+          593.9581909179688,
+          467.1869201660156
+        ],
+        "box_xyxy": [
+          797.0159606933594,
+          3727.2676696777344,
+          986.9581909179688,
+          3912.1869201660156
+        ],
+        "x": 890.951166951289,
+        "y": 3822.7168008457347,
+        "radius_px": 88.4788864125456,
+        "mask_area_px": 24594.0,
+        "source": "grounding_dino_sam2",
+        "merged_indices": [
+          1,
+          5
+        ]
+      },
+      {
+        "index": 0,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.3295036852359772,
+        "box_crop_xyxy": [
+          1195.8326416015625,
+          327.9821472167969,
+          1375.425048828125,
+          508.2606506347656
+        ],
+        "box_xyxy": [
+          1588.8326416015625,
+          3772.982147216797,
+          1768.425048828125,
+          3953.2606506347656
+        ],
+        "x": 1676.095573700043,
+        "y": 3866.07202406532,
+        "radius_px": 86.06434250894391,
+        "mask_area_px": 23270.0,
+        "source": "grounding_dino_sam2",
+        "merged_indices": [
+          0,
+          4
+        ]
+      },
+      {
+        "index": 2,
+        "label": "wheel tire car wheel racing wheel",
+        "score": 0.3206627368927002,
+        "box_crop_xyxy": [
+          301.16070556640625,
+          206.81065368652344,
+          467.259765625,
+          290.54388427734375
+        ],
+        "box_xyxy": [
+          694.1607055664062,
+          3651.8106536865234,
+          860.259765625,
+          3735.5438842773438
+        ],
+        "x": 772.5754989180091,
+        "y": 3694.062515027651,
+        "radius_px": 51.455822151402565,
+        "mask_area_px": 8318.0,
+        "source": "grounding_dino_sam2",
+        "merged_indices": [
+          2,
+          6
+        ]
+      },
+      {
+        "index": 3,
+        "label": "wheel car wheel racing wheel",
+        "score": 0.3138241767883301,
+        "box_crop_xyxy": [
+          126.8556137084961,
+          188.00271606445312,
+          1453.660400390625,
+          510.4586181640625
+        ],
+        "box_xyxy": [
+          519.8556137084961,
+          3633.002716064453,
+          1846.660400390625,
+          3955.4586181640625
+        ],
+        "x": 1227.1209615955459,
+        "y": 3791.526434651456,
+        "radius_px": 281.69619231772003,
+        "mask_area_px": 249294.0,
+        "source": "grounding_dino_sam2",
+        "merged_indices": [
+          3,
+          7
+        ]
+      }
+    ],
+    "wheelbase_bbox_ratio_prior": 0.5,
+    "left_wheel_xy": [
+      890.951166951289,
+      3822.7168008457347
+    ],
+    "right_wheel_xy": [
+      1676.095573700043,
+      3866.07202406532
+    ],
+    "left_candidate_index": 1,
+    "right_candidate_index": 0
+  },
+  "assumptions": [
+    "camera pan angular velocity from background blur matches car angular velocity",
+    "wheelbase is approximately parallel to the image plane",
+    "wheel centers are measured in the panning image coordinate frame"
+  ],
+  "outputs": {
+    "wheel_overlay": "outputs/pan_1/car_speed_wheels.png"
+  }
+}

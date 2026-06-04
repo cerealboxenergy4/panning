@@ -13,29 +13,34 @@ we can extract that kernel without any deconvolution.
 ## Pipeline Overview
 
 ```
-pan_1.jpg  ──────────────────────────────────────────────────────────────────┐
-           │                                                                  │
-           ▼                                                                  ▼
-   [ Stage 1 ]                                                        [ Stage 3 ]
-  segment_car.py                                                  kernel_estimation.py
-  Grounded SAM2                                                   ├─ global φ from full image
-  → car_mask.png                                                  ├─ per-patch sinc² spectral fit
-           │                                                      ├─ pixel-domain MSE refinement
-           │                  sharp_1.jpg                         └─ kernel_map.npz / .png
-           │                       │                                         │
-           ▼                       ▼                                         ▼
-   [ Stage 2 ]                                                        [ Stage 4 ]
-  register_reference.py                                          trajectory_fitting.py
-  LoFTR + RANSAC                                                  WLS: b_i = Bx·cosφ + By·sinφ
-  → sharp_registered.png ────────────────────────────────────►   → trajectory.json
-    sharp_registered_valid.png
+pan_1.jpg
+  │
+  ├─[ Stage 1 ] pipeline/segment_car.py
+  │              Grounded SAM2 → car_mask.png
+  │
+  ├─[ Stage 2 ] pipeline/register_reference.py  +  sharp_1.jpg
+  │              LoFTR/SIFT/ORB + RANSAC → sharp_registered.png
+  │
+  ├─[ Stage 3 ] pipeline/kernel_estimation.py
+  │              gradient-aware patch filtering + pixel-domain blur fit
+  │              → kernel_map.npz / kernel_map.png
+  │
+  ├─[ Stage 4 ] pipeline/trajectory_fitting.py
+  │              weighted RANSAC + WLS → trajectory.json
+  │
+  └─[ Stage 5 ] pipeline/estimate_car_speed.py
+                 EXIF focal metadata + 3400 mm wheelbase
+                 → car_speed.json / car_speed_wheels.png
 ```
+
+By default, full runs and individual stages write to `outputs/<blurry_stem>/`
+(for example, `outputs/pan_1/` when the blurry image is `pan_1.jpg`).
 
 ---
 
 ## Stages
 
-### Stage 1 — Car Segmentation (`segment_car.py`)
+### Stage 1 — Car Segmentation (`pipeline/segment_car.py`)
 
 Isolates the F1 car so it is excluded from all background kernel estimates.
 
@@ -44,16 +49,17 @@ Isolates the F1 car so it is excluded from all background kernel estimates.
 - **SAM 2** refines those boxes into pixel-accurate instance masks.
 
 Outputs:
-- `outputs/car_mask.png` — binary mask (255 = car, 0 = background)
-- `outputs/car_detection.png` — overlay visualization
+- `outputs/pan_1/car_mask.png` — binary mask (255 = car, 0 = background)
+- `outputs/pan_1/car_detection.png` — overlay visualization
+- `outputs/pan_1/car_detection.json` — GroundingDINO car boxes used as Stage 5 crop metadata
 
 ```bash
-python segment_car.py --image pan_1.jpg
+python pipeline/segment_car.py --image pan_1.jpg
 ```
 
 ---
 
-### Stage 2 — Reference Registration (`register_reference.py`)
+### Stage 2 — Reference Registration (`pipeline/register_reference.py`)
 
 Warps `sharp_1.jpg` into the coordinate frame of `pan_1.jpg` via a projective
 homography so that each background pixel in the blurry image has a corresponding
@@ -71,18 +77,18 @@ sharp pixel from the reference.
   vs. zero-padded fill, so Stage 3 can skip boundary patches.
 
 Outputs:
-- `outputs/sharp_registered.png` — sharp reference in blurry image frame
-- `outputs/sharp_registered_valid.png` — coverage mask (white = valid)
-- `outputs/homography.npy` — 3×3 homography H (maps sharp → blurry)
-- `outputs/registration_debug.png` — inlier match visualization
+- `outputs/pan_1/sharp_registered.png` — sharp reference in blurry image frame
+- `outputs/pan_1/sharp_registered_valid.png` — coverage mask (white = valid)
+- `outputs/pan_1/homography.npy` — 3×3 homography H (maps sharp → blurry)
+- `outputs/pan_1/registration_debug.png` — inlier match visualization
 
 ```bash
-python register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg
+python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg
 ```
 
 ---
 
-### Stage 3 — Kernel Estimation (`kernel_estimation.py`)
+### Stage 3 — Kernel Estimation (`pipeline/kernel_estimation.py`)
 
 Estimates the blur kernel length `b` (in pixels) for each background patch using
 the registered sharp image as a reference. The blur direction `φ` is treated as
@@ -103,7 +109,16 @@ patches where local scene gradients dominate over the blur signature.
 #### Per-patch kernel length
 
 For each eligible background patch (not car, fully covered by the registered
-sharp, sufficient gradient energy in the sharp reference):
+sharp, sufficient structural content in the sharp reference):
+
+**Gradient-aware patch selection**
+
+Before fitting a kernel, each registered sharp patch is scored for structural
+content using Sobel gradient energy, gradient-magnitude variance, and Harris
+corner response. Low-energy patches are skipped by default; `--grad_var_thres`
+and `--harris_thres` can further require high-contrast texture or strong corners.
+The saved `confidence` is the texture score (`grad_energy + grad_mag_var`), so
+high-texture patches carry more weight downstream.
 
 **Primary estimate — pixel-domain MSE (`b_px_pixel`)**
 
@@ -118,7 +133,7 @@ b_px_pixel = argmin_{b ∈ [1, 0.45·P]}  ||blur_patch − sharp_aligned ⊛ k(b
 
 Empirically this yields more accurate kernel estimates than initialising from the
 spectral fit, because the spectral ratio is sensitive to registration noise and
-JPEG compression artefacts in the frequency domain. `trajectory_fitting.py` and
+JPEG compression artefacts in the frequency domain. `pipeline/trajectory_fitting.py` and
 the uniform trajectory baseline both use `b_px_pixel`.
 
 **Auxiliary estimate — spectral sinc² fit (`b_px_spec`)**
@@ -142,6 +157,8 @@ low-frequency weighting (higher SNR at low f). Stored in `kernel_map.npz` as
 | `skip_car` | patch car fraction > 10% |
 | `skip_invalid_region` | valid mask coverage < 95% |
 | `skip_flat_sharp` | Sobel energy in sharp patch < threshold (kernel underdetermined) |
+| `skip_low_texture` | gradient-magnitude variance < threshold |
+| `skip_no_corner` | max Harris corner response < threshold |
 
 #### Uniform trajectory baseline
 
@@ -151,17 +168,15 @@ confidence-weighted mean of all valid `b_px_pixel` estimates and applied to the
 `pan_1.jpg` without trajectory fitting.
 
 Outputs:
-- `outputs/kernel_map.npz` — per-patch arrays: `b_px`, `b_px_spec`, `b_px_pixel`, `phi_deg`, `confidence`, `status`
-- `outputs/kernel_map.csv` — same as CSV
-- `outputs/kernel_map.png` — overlay: arrows show blur direction, colour encodes `b_px_pixel`
-- `outputs/kernel_patch_grid.png` — 8×6 diagnostic grid (4 near-mean + 4 outlier patches)
-- `outputs/uniform_traj.json` — global `(Bx, By, b, φ)` from weighted mean
-- `outputs/uniform_trajectory_residual.png` — blurry | re-blurred | |residual|
+- `outputs/pan_1/kernel_map.npz` — per-patch arrays: `b_px`, `b_px_spec`, `b_px_pixel`, `phi_deg`, `confidence`, texture metrics, `status`
+- `outputs/pan_1/kernel_map.csv` — same as CSV
+- `outputs/pan_1/kernel_map.png` — overlay: arrows show blur direction, colour encodes `b_px_pixel`
+- `outputs/pan_1/kernel_patch_grid.png` — 8×6 diagnostic grid (4 near-mean + 4 outlier patches)
+- `outputs/pan_1/uniform_traj.json` — global `(Bx, By, b, φ)` from weighted mean
+- `outputs/pan_1/uniform_trajectory_residual.png` — blurry | re-blurred | |residual|
 
 ```bash
-python kernel_estimation.py --blurry pan_1.jpg \
-                             --sharp_reg outputs/sharp_registered.png \
-                             --car_mask  outputs/car_mask.png
+python pipeline/kernel_estimation.py --blurry pan_1.jpg
 ```
 
 Key arguments:
@@ -170,12 +185,14 @@ Key arguments:
 |----------|---------|-------------|
 | `--patch_size` | 400 | Patch edge length in pixels |
 | `--grad_energy_thres` | 100 | Min Sobel energy in sharp patch |
+| `--grad_var_thres` | 0 | Min gradient-magnitude variance; 0 disables |
+| `--harris_thres` | 0 | Min max Harris corner response; 0 disables |
 | `--global_phi` | — | Hard-override blur direction (skips pre-pass) |
 | `--valid_thres` | 0.95 | Min fraction of patch covered by registration |
 
 ---
 
-### Stage 4 — Trajectory Fitting (`trajectory_fitting.py`)
+### Stage 4 — Trajectory Fitting (`pipeline/trajectory_fitting.py`)
 
 Fits a global 2D displacement vector **B = (Bx, By)** in pixel space from all
 inlier patch estimates. Under constant-velocity panning, each patch's blur
@@ -185,8 +202,10 @@ length satisfies:
 b_i = Bx · cos(φ_i) + By · sin(φ_i)
 ```
 
-This is solved as weighted least squares (confidence = Sobel energy of sharp
-patch). One round of outlier rejection drops patches with |residual| > 2.5σ.
+This is solved with weighted RANSAC followed by weighted least squares on the
+consensus inlier set. RANSAC samples are biased toward high-confidence texture
+patches, and the final WLS fit uses the selected weight field (`confidence` by
+default). Use `--disable_ransac` to fall back to sigma-clipped WLS.
 
 Because all φ_i are nearly identical (pure panning), the system is nearly
 rank-1. When the weighted spread of φ is < 5°, a 1D scalar fit is used instead
@@ -204,14 +223,41 @@ angular velocity      ω = α / t_exposure        [rad/s]
 ```
 
 Outputs:
-- `outputs/trajectory.json` — fitted parameters + physical quantities (ω in deg/s and rad/s)
-- `outputs/trajectory_residual.png` — blurry | re-blurred sharp | |residual|
-- `outputs/trajectory_scatter.png` — measured vs predicted `b` per patch + spatial residual map
+- `outputs/pan_1/trajectory.json` — fitted parameters + physical quantities (ω in deg/s and rad/s)
+- `outputs/pan_1/trajectory_residual.png` — blurry | re-blurred sharp | |residual|
+- `outputs/pan_1/trajectory_scatter.png` — measured vs predicted `b` per patch + spatial residual map
 
 ```bash
-python trajectory_fitting.py --kernel_map outputs/kernel_map.npz \
-                              --sharp_reg  outputs/sharp_registered.png \
-                              --blurry     pan_1.jpg
+python pipeline/trajectory_fitting.py --blurry pan_1.jpg --ransac_residual_thres 15
+```
+
+---
+
+### Stage 5 — Car Speed Estimation (`pipeline/estimate_car_speed.py`)
+
+Estimates the car speed from the fitted camera pan rate and the apparent car
+wheelbase. The default real wheelbase is `3400 mm`; the image wheelbase is the
+distance between detected or manually supplied wheel centers.
+
+```
+depth_m = focal_px * wheelbase_m / wheelbase_px
+speed_m_s = omega_rad_s * depth_m
+```
+
+`focal_px` is read from EXIF focal metadata when available. If the JPEG has been
+stripped, the script falls back to the focal calibration saved in
+`trajectory.json`, or you can pass `--focal_px` / `--focal_mm --sensor_width_mm`.
+Wheel centers are estimated by cropping to the Stage 1 GroundingDINO car bbox,
+running a wheel/tire GroundingDINO prompt inside that subset, and refining wheel
+boxes with SAM2 masks. The measurement can still be overridden with
+`--left_wheel x y --right_wheel x y` or `--wheelbase_px`.
+
+Outputs:
+- `outputs/pan_1/car_speed.json` — depth, speed, focal source, wheelbase measurement, assumptions
+- `outputs/pan_1/car_speed_wheels.png` — wheel-center measurement overlay
+
+```bash
+python pipeline/estimate_car_speed.py --image pan_1.jpg
 ```
 
 ---
@@ -221,46 +267,54 @@ python trajectory_fitting.py --kernel_map outputs/kernel_map.npz \
 ```bash
 conda activate tttnvs
 
-python run_pipeline.py --blurry pan_1.jpg --sharp sharp_1.jpg
+python pipeline/run_pipeline.py --blurry pan_1.jpg --sharp sharp_1.jpg
 ```
 
 The runner pins child processes to GPU 4 by default and writes all artifacts to
-`outputs/`. It skips stages whose expected outputs already exist; add `--force`
-to rerun from scratch.
+`outputs/<blurry_stem>/` (for the command above, `outputs/pan_1/`). It skips
+stages whose expected outputs already exist; add `--force` to rerun from scratch.
 
 Useful variants:
 
 ```bash
 # Print the commands without running them.
-python run_pipeline.py --dry-run
+python pipeline/run_pipeline.py --dry-run
 
-# Rerun only kernel estimation and trajectory fitting.
-python run_pipeline.py --start-at kernel --force
+# Rerun kernel estimation, trajectory fitting, and speed estimation.
+python pipeline/run_pipeline.py --start-at kernel --force
 
-# Run a fresh pipeline into a separate output directory.
-python run_pipeline.py --out_dir outputs_test --force
+# Rerun only speed estimation after manually specifying wheel centers.
+python pipeline/run_pipeline.py --start-at speed --stop-after speed --left_wheel 1650 3350 --right_wheel 2320 3350
+
+# Run a fresh pipeline into a named subdirectory under outputs/.
+python pipeline/run_pipeline.py --out_dir outputs/pan_1_rerun --force
 ```
 
-The stages can still be run individually for debugging:
+The stages can still be run individually for debugging. These commands use the
+same `outputs/pan_1/` run directory by default:
 
 ```bash
-python segment_car.py --image pan_1.jpg
-python register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg
-python kernel_estimation.py --blurry pan_1.jpg --sharp_reg outputs/sharp_registered.png --car_mask outputs/car_mask.png
-python trajectory_fitting.py --kernel_map outputs/kernel_map.npz --sharp_reg outputs/sharp_registered.png --blurry pan_1.jpg
+python pipeline/segment_car.py --image pan_1.jpg
+python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg
+python pipeline/kernel_estimation.py --blurry pan_1.jpg
+python pipeline/trajectory_fitting.py --blurry pan_1.jpg
+python pipeline/estimate_car_speed.py --image pan_1.jpg
 ```
 
 Camera constants (focal length, sensor size, exposure time) are hard-coded at
-the top of `trajectory_fitting.py` — edit these to match your EXIF data before
+the top of `pipeline/trajectory_fitting.py` — edit these to match your EXIF data before
 running.
 
 ---
 
 ## Output Summary
 
+Paths are relative to a run directory such as `outputs/pan_1/`.
+
 | File | Stage | Description |
 |------|-------|-------------|
 | `car_mask.png` | 1 | Binary car segmentation |
+| `car_detection.json` | 1 | GroundingDINO car boxes and selected crop bbox |
 | `sharp_registered.png` | 2 | Sharp reference in blurry frame |
 | `sharp_registered_valid.png` | 2 | Registration coverage mask |
 | `kernel_map.npz` | 3 | Per-patch kernel estimates |
@@ -271,6 +325,8 @@ running.
 | `trajectory.json` | 4 | Fitted B, φ, ω |
 | `trajectory_residual.png` | 4 | Full-image re-blur residual |
 | `trajectory_scatter.png` | 4 | Measured vs predicted scatter |
+| `car_speed.json` | 5 | Estimated car depth and speed |
+| `car_speed_wheels.png` | 5 | Wheel-center measurement overlay |
 
 ---
 
