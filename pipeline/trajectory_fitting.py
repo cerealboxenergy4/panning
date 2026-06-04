@@ -214,6 +214,8 @@ def main():
                    help='Kernel map path; defaults to <out_dir>/kernel_map.npz')
     p.add_argument('--sharp_reg', default=None,
                    help='Registered sharp image; defaults to <out_dir>/sharp_registered.png')
+    p.add_argument('--skip_residual_image', action='store_true',
+                   help='Skip re-blurred-sharp residual image output for blind runs.')
     p.add_argument('--blurry', default='pan_1.jpg')
     p.add_argument('--output_root', default='outputs',
                    help='Parent directory for per-image output subdirectories')
@@ -244,7 +246,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.kernel_map is None:
         args.kernel_map = str(out_dir / 'kernel_map.npz')
-    if args.sharp_reg is None:
+    if args.sharp_reg is None and not args.skip_residual_image:
         args.sharp_reg = str(out_dir / 'sharp_registered.png')
 
     # ── Load kernel map ───────────────────────────────────────────────────────
@@ -350,34 +352,39 @@ def main():
         json.dump(result, f, indent=2)
     print(f"\nSaved: {traj_path}")
 
-    # ── Sanity check: re-blur sharp_registered → compare to blurry ───────────
+    # ── Optional sanity check: re-blur sharp_registered → compare to blurry ───
     def load_gray(path):
         return np.array(
             ImageOps.exif_transpose(Image.open(path)).convert('L'),
             dtype=np.float32)
 
-    sharp_gray = load_gray(args.sharp_reg)
     blur_gray = load_gray(args.blurry)
 
-    reblurred = apply_motion_blur(sharp_gray, b_total, phi_fit)
-    residual = np.abs(reblurred - blur_gray)
+    if args.skip_residual_image:
+        print('Skipping trajectory_residual.png because --skip_residual_image was supplied.')
+    elif args.sharp_reg is None or not Path(args.sharp_reg).exists():
+        print(f"[warn] {args.sharp_reg} not found; skipping trajectory_residual.png")
+    else:
+        sharp_gray = load_gray(args.sharp_reg)
+        reblurred = apply_motion_blur(sharp_gray, b_total, phi_fit)
+        residual = np.abs(reblurred - blur_gray)
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    axes[0].imshow(blur_gray, cmap='gray', vmin=0, vmax=255)
-    axes[0].set_title('Observed blurry image')
-    axes[1].imshow(reblurred, cmap='gray', vmin=0, vmax=255)
-    axes[1].set_title(f'Re-blurred sharp ref  (b={b_total:.1f} px, φ={phi_fit:.1f}°)')
-    im = axes[2].imshow(residual, cmap='hot', vmin=0, vmax=60)
-    axes[2].set_title(
-        f'|Residual|   mean={residual.mean():.1f}  std={residual.std():.1f}')
-    fig.colorbar(im, ax=axes[2], fraction=0.025)
-    for ax in axes:
-        ax.axis('off')
-    plt.tight_layout()
-    res_path = out_dir / 'trajectory_residual.png'
-    fig.savefig(res_path, dpi=120, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved: {res_path}")
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        axes[0].imshow(blur_gray, cmap='gray', vmin=0, vmax=255)
+        axes[0].set_title('Observed blurry image')
+        axes[1].imshow(reblurred, cmap='gray', vmin=0, vmax=255)
+        axes[1].set_title(f'Re-blurred sharp ref  (b={b_total:.1f} px, φ={phi_fit:.1f}°)')
+        im = axes[2].imshow(residual, cmap='hot', vmin=0, vmax=60)
+        axes[2].set_title(
+            f'|Residual|   mean={residual.mean():.1f}  std={residual.std():.1f}')
+        fig.colorbar(im, ax=axes[2], fraction=0.025)
+        for ax in axes:
+            ax.axis('off')
+        plt.tight_layout()
+        res_path = out_dir / 'trajectory_residual.png'
+        fig.savefig(res_path, dpi=120, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved: {res_path}")
 
     # ── Scatter: measured vs predicted b ─────────────────────────────────────
     phi_r = np.radians(phi_used)

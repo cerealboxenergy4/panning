@@ -275,6 +275,23 @@ conda activate tttnvs
 python pipeline/run_pipeline.py --blurry pan_1.jpg --sharp sharp_1.jpg
 ```
 
+### Experimental Blind Pipeline
+
+A reference-free path is available when no sharp image is supplied. It keeps the
+car segmentation and speed stages, but replaces registration and reference-based
+kernel fitting with blind spectral-notch kernel estimation from the blurry
+background patches:
+
+```bash
+python pipeline/run_blind_pipeline.py --blurry pan_1.jpg
+```
+
+Blind outputs default to `outputs/<blurry_stem>__blind/`. The blind estimator is
+noisier than the reference-based pipeline because it assumes the latent
+background spectrum is locally smooth; use it as a diagnostic or fallback when a
+sharp reference is unavailable. Its default `--b_min 120` avoids short-harmonic
+notch fits on high-speed panning shots; lower it for gentler blur.
+
 The runner pins child processes to GPU 4 by default and writes all artifacts to
 `outputs/<blurry_stem>__<sharp_stem>/` (for the command above, `outputs/pan_1__sharp_1/`). It skips
 stages whose expected outputs already exist; add `--force` to rerun from scratch.
