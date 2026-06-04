@@ -196,6 +196,10 @@ def main() -> int:
     parser.add_argument("--wheel_box_threshold", type=float, default=0.18)
     parser.add_argument("--wheel_text_threshold", type=float, default=0.15)
     parser.add_argument("--wheelbase_bbox_ratio_prior", type=float, default=0.50)
+    parser.add_argument("--pan_focal_px", type=float, default=None, help="Manual panning-image focal length in pixels for trajectory fitting.")
+    parser.add_argument("--pan_focal_mm", type=float, default=None, help="Manual panning-image focal length in mm for trajectory fitting.")
+    parser.add_argument("--pan_sensor_width_mm", type=float, default=None, help="Sensor width in mm for trajectory fitting.")
+    parser.add_argument("--pan_exposure_s", type=float, default=None, help="Manual panning-image exposure time in seconds.")
     parser.add_argument("--speed_focal_px", type=float, default=None, help="Manual focal length in pixels for speed estimation.")
     parser.add_argument("--speed_focal_mm", type=float, default=None, help="Manual focal length in mm for speed estimation.")
     parser.add_argument("--speed_sensor_width_mm", type=float, default=None, help="Sensor width in mm for speed estimation.")
@@ -207,6 +211,14 @@ def main() -> int:
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
     check_inputs([blurry, sharp])
+
+    speed_focal_px = args.speed_focal_px if args.speed_focal_px is not None else args.pan_focal_px
+    speed_focal_mm = args.speed_focal_mm if args.speed_focal_mm is not None else args.pan_focal_mm
+    speed_sensor_width_mm = (
+        args.speed_sensor_width_mm
+        if args.speed_sensor_width_mm is not None
+        else args.pan_sensor_width_mm
+    )
 
     car_mask = out_dir / "car_mask.png"
     car_detection_json = out_dir / "car_detection.json"
@@ -345,6 +357,8 @@ def main() -> int:
                 str(sharp_reg),
                 "--blurry",
                 str(blurry),
+                "--sharp_image",
+                str(sharp),
                 "--out_dir",
                 str(out_dir),
                 "--outlier_sigma",
@@ -361,6 +375,10 @@ def main() -> int:
                 str(args.ransac_seed),
             ]
             + ([] if args.manual_blur_px is None else ["--manual_blur_px", str(args.manual_blur_px)])
+            + ([] if args.pan_focal_px is None else ["--focal_px", str(args.pan_focal_px)])
+            + ([] if args.pan_focal_mm is None else ["--focal_mm", str(args.pan_focal_mm)])
+            + ([] if args.pan_sensor_width_mm is None else ["--sensor_width_mm", str(args.pan_sensor_width_mm)])
+            + ([] if args.pan_exposure_s is None else ["--exposure_s", str(args.pan_exposure_s)])
             + (["--disable_ransac"] if args.disable_ransac else []),
             outputs=[
                 trajectory_json,
@@ -399,9 +417,9 @@ def main() -> int:
             + ([] if args.wheelbase_px is None else ["--wheelbase_px", str(args.wheelbase_px)])
             + ([] if args.left_wheel is None else ["--left_wheel", *(str(v) for v in args.left_wheel)])
             + ([] if args.right_wheel is None else ["--right_wheel", *(str(v) for v in args.right_wheel)])
-            + ([] if args.speed_focal_px is None else ["--focal_px", str(args.speed_focal_px)])
-            + ([] if args.speed_focal_mm is None else ["--focal_mm", str(args.speed_focal_mm)])
-            + ([] if args.speed_sensor_width_mm is None else ["--sensor_width_mm", str(args.speed_sensor_width_mm)]),
+            + ([] if speed_focal_px is None else ["--focal_px", str(speed_focal_px)])
+            + ([] if speed_focal_mm is None else ["--focal_mm", str(speed_focal_mm)])
+            + ([] if speed_sensor_width_mm is None else ["--sensor_width_mm", str(speed_sensor_width_mm)]),
             outputs=[
                 out_dir / "car_speed.json",
                 out_dir / "car_speed_wheels.png",

@@ -39,12 +39,29 @@ import matplotlib.pyplot as plt
 from matplotlib import colors
 from matplotlib.patches import Rectangle
 
-# ── Camera constants (from EXIF) ─────────────────────────────────────────────
-FOCAL_MM    = 31.0
-SENSOR_W_MM = 23.5
-IMAGE_W_PX  = 6000
-PIXEL_PITCH = SENSOR_W_MM / IMAGE_W_PX   # mm/px ≈ 3.917e-3
-EXPOSURE_S  = 1 / 125
+try:
+    from .exif_utils import (
+        DEFAULT_EXPOSURE_S,
+        DEFAULT_FOCAL_MM,
+        DEFAULT_SENSOR_W_MM,
+        compare_exif_metadata,
+        read_image_exif_metadata,
+        resolve_camera_calibration,
+    )
+except ImportError:  # pragma: no cover - supports `python pipeline/trajectory_fitting.py`
+    from exif_utils import (
+        DEFAULT_EXPOSURE_S,
+        DEFAULT_FOCAL_MM,
+        DEFAULT_SENSOR_W_MM,
+        compare_exif_metadata,
+        read_image_exif_metadata,
+        resolve_camera_calibration,
+    )
+
+# Fallback calibration used only when the panning image has no usable EXIF.
+FALLBACK_FOCAL_MM = DEFAULT_FOCAL_MM
+FALLBACK_SENSOR_W_MM = DEFAULT_SENSOR_W_MM
+FALLBACK_EXPOSURE_S = DEFAULT_EXPOSURE_S
 
 
 # ── Weighted robust fitting ───────────────────────────────────────────────────
@@ -408,6 +425,8 @@ def main():
     p.add_argument('--skip_residual_image', action='store_true',
                    help='Skip re-blurred-sharp residual image output for blind runs.')
     p.add_argument('--blurry', default='pan_1.jpg')
+    p.add_argument('--sharp_image', default=None,
+                   help='Original sharp reference image, used for EXIF comparison metadata only.')
     p.add_argument('--output_root', default='outputs',
                    help='Parent directory for per-image output subdirectories')
     p.add_argument('--out_dir', default=None,
@@ -428,6 +447,14 @@ def main():
                    help='Kernel-map field to use as WLS/RANSAC weights, e.g. confidence or grad_mag_var')
     p.add_argument('--manual_blur_px', type=float, default=None,
                    help='Optional manual blur length reference annotated on kernel_contribution_map.png')
+    p.add_argument('--focal_px', type=float, default=None,
+                   help='Override panning-image focal length in pixels for angular velocity conversion.')
+    p.add_argument('--focal_mm', type=float, default=None,
+                   help='Override panning-image focal length in millimeters.')
+    p.add_argument('--sensor_width_mm', type=float, default=None,
+                   help='Sensor width used with --focal_mm or EXIF focal length when focal-plane metadata is missing.')
+    p.add_argument('--exposure_s', type=float, default=None,
+                   help='Override panning-image exposure time in seconds.')
     args = p.parse_args()
 
     if args.out_dir is not None:
@@ -441,6 +468,22 @@ def main():
         args.kernel_map = str(out_dir / 'kernel_map.npz')
     if args.sharp_reg is None and not args.skip_residual_image:
         args.sharp_reg = str(out_dir / 'sharp_registered.png')
+
+    calibration = resolve_camera_calibration(
+        args.blurry,
+        focal_px=args.focal_px,
+        focal_mm=args.focal_mm,
+        sensor_width_mm=args.sensor_width_mm,
+        exposure_s=args.exposure_s,
+        fallback_focal_mm=FALLBACK_FOCAL_MM,
+        fallback_sensor_width_mm=FALLBACK_SENSOR_W_MM,
+        fallback_exposure_s=FALLBACK_EXPOSURE_S,
+    )
+    sharp_exif = read_image_exif_metadata(args.sharp_image) if args.sharp_image else None
+    exif_comparison = compare_exif_metadata(calibration['exif'], sharp_exif)
+    if exif_comparison and exif_comparison.get('warnings'):
+        for warning in exif_comparison['warnings']:
+            print(f"[warn] EXIF comparison: {warning}")
 
     # ── Load kernel map ───────────────────────────────────────────────────────
     data = np.load(args.kernel_map, allow_pickle=True)
@@ -508,9 +551,10 @@ def main():
     # ── Derived quantities ────────────────────────────────────────────────────
     b_total = float(np.sqrt(B_x ** 2 + B_y ** 2))
     phi_fit = float(np.degrees(np.arctan2(B_y, B_x)) % 180.0)
-    f_px = FOCAL_MM / PIXEL_PITCH                   # focal length in pixels
+    f_px = float(calibration['focal_px'])             # panning-image focal length in pixels
+    exposure_s = float(calibration['exposure_s'])
     alpha_rad = b_total / f_px                      # total angular displacement
-    omega_rad_s = alpha_rad / EXPOSURE_S            # angular velocity
+    omega_rad_s = alpha_rad / exposure_s            # angular velocity
 
     print(f"\n=== Trajectory Fit ===")
     print(f"  B_x = {B_x:+.2f} px,  B_y = {B_y:+.2f} px")
@@ -518,6 +562,10 @@ def main():
     print(f"  φ   = {phi_fit:.2f}°   (blur direction)")
     print(f"  α   = {alpha_rad * 1e3:.3f} mrad  ({np.degrees(alpha_rad) * 60:.3f} arcmin)")
     print(f"  ω   = {np.degrees(omega_rad_s):.2f} °/s  =  {omega_rad_s:.4f} rad/s")
+    print(
+        f"  camera = f_px {f_px:.1f} ({calibration['focal_source']}), "
+        f"exposure {exposure_s:.6f}s ({calibration['exposure_source']})"
+    )
     print(f"  Weighted RMSE: {final_wrmse:.2f} px  (over {len(b_used)} inlier patches)")
 
     # ── Save JSON ─────────────────────────────────────────────────────────────
@@ -534,11 +582,18 @@ def main():
         'fit_method': fit_method,
         'weight_field': weight_field,
         **ransac_info,
-        'exposure_s': EXPOSURE_S,
-        'focal_mm': FOCAL_MM,
-        'sensor_w_mm': SENSOR_W_MM,
-        'pixel_pitch_mm': float(PIXEL_PITCH),
+        'exposure_s': exposure_s,
+        'exposure_source': calibration['exposure_source'],
+        'focal_mm': calibration.get('focal_mm'),
+        'sensor_w_mm': calibration.get('sensor_width_mm'),
+        'pixel_pitch_mm': calibration.get('pixel_pitch_mm'),
         'focal_px': float(f_px),
+        'focal_source': calibration['focal_source'],
+        'camera_metadata': {
+            'blurry': calibration['exif'],
+            'sharp_reference': sharp_exif,
+            'comparison': exif_comparison,
+        },
     }
     if args.manual_blur_px is not None:
         result['manual_blur_px'] = float(args.manual_blur_px)

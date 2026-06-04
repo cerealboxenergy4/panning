@@ -219,12 +219,18 @@ perpendicular component.
 #### Physical conversion
 
 ```
-pixel pitch   p = sensor_width / image_width_px
-focal length  f_px = focal_mm / p
-
-angular displacement  α = |B| · p / focal_mm   [rad]
-angular velocity      ω = α / t_exposure        [rad/s]
+focal length          f_px = panning-image focal length in pixels
+angular displacement  α = |B| / f_px                 [rad]
+angular velocity      ω = α / panning_exposure_time  [rad/s]
 ```
+
+Stage 4 reads focal length and exposure from the panning image EXIF when those
+standard tags are available. The original sharp-reference image can be supplied
+with `--sharp_image`; its EXIF is stored in `trajectory.json` only for comparison
+so differences between the reference frame and panning frame are visible. If EXIF
+is stripped, Stage 4 falls back to the previous Sony a5100 defaults
+(`31 mm`, `23.5 mm` sensor width, `1/125 s`) or accepts explicit
+`--focal_px`, `--focal_mm --sensor_width_mm`, and `--exposure_s` overrides.
 
 Outputs:
 - `outputs/pan_1__sharp_1/trajectory.json` — fitted parameters + physical quantities (ω in deg/s and rad/s)
@@ -233,10 +239,12 @@ Outputs:
 - `outputs/pan_1__sharp_1/kernel_contribution_map.png` — patch overlay showing RANSAC inliers/outliers and weighted contribution to the final blur length
 
 ```bash
-python pipeline/trajectory_fitting.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1 --ransac_residual_thres 15
+python pipeline/trajectory_fitting.py --blurry pan_1.jpg --sharp_image sharp_1.jpg --out_dir outputs/pan_1__sharp_1 --ransac_residual_thres 15
 ```
 
 Use `--manual_blur_px 140` to annotate an eyeballed blur-length reference on `kernel_contribution_map.png`.
+For stripped JPEGs, pass panning-camera values explicitly, for example
+`--focal_mm 31 --sensor_width_mm 23.5 --exposure_s 0.008`.
 
 ---
 
@@ -322,13 +330,15 @@ same `outputs/pan_1__sharp_1/` run directory explicitly:
 python pipeline/segment_car.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
 python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg --out_dir outputs/pan_1__sharp_1
 python pipeline/kernel_estimation.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1
-python pipeline/trajectory_fitting.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1
+python pipeline/trajectory_fitting.py --blurry pan_1.jpg --sharp_image sharp_1.jpg --out_dir outputs/pan_1__sharp_1
 python pipeline/estimate_car_speed.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
 ```
 
-Camera constants (focal length, sensor size, exposure time) are hard-coded at
-the top of `pipeline/trajectory_fitting.py` — edit these to match your EXIF data before
-running.
+Panning-camera calibration is read from the blurry image EXIF when possible.
+If the JPEGs have been stripped, pass `--pan_focal_px` or
+`--pan_focal_mm --pan_sensor_width_mm --pan_exposure_s` to `run_pipeline.py`.
+`trajectory.json` records both the panning-frame metadata and the sharp-reference
+metadata comparison.
 
 ---
 
