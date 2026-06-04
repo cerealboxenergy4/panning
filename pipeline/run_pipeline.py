@@ -23,6 +23,10 @@ class Stage:
 STAGE_KEYS = ("segment", "register", "kernel", "trajectory", "speed")
 
 
+def default_run_dir(output_root: str | Path, blurry: Path, sharp: Path) -> Path:
+    return Path(output_root) / f"{blurry.stem}__{sharp.stem}"
+
+
 def existing(paths: list[Path]) -> bool:
     return all(path.exists() for path in paths)
 
@@ -103,12 +107,12 @@ def main() -> int:
     parser.add_argument(
         "--output_root",
         default="outputs",
-        help="Parent directory for per-input output subdirectories.",
+        help="Parent directory for per-pair output subdirectories.",
     )
     parser.add_argument(
         "--out_dir",
         default=None,
-        help="Explicit output directory override; defaults to <output_root>/<blurry_stem>.",
+        help="Explicit output directory override; defaults to <output_root>/<blurry_stem>__<sharp_stem>.",
     )
     parser.add_argument("--gpu", default="4", help="Physical GPU id exposed to child processes.")
     parser.add_argument("--cpu", action="store_true", help="Run child processes without CUDA.")
@@ -193,7 +197,7 @@ def main() -> int:
 
     blurry = Path(args.blurry)
     sharp = Path(args.sharp)
-    out_dir = Path(args.out_dir) if args.out_dir is not None else Path(args.output_root) / blurry.stem
+    out_dir = Path(args.out_dir) if args.out_dir is not None else default_run_dir(args.output_root, blurry, sharp)
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
     check_inputs([blurry, sharp])
@@ -393,6 +397,7 @@ def main() -> int:
             outputs=[
                 out_dir / "car_speed.json",
                 out_dir / "car_speed_wheels.png",
+                out_dir / "final_result.png",
             ],
         ),
     ]

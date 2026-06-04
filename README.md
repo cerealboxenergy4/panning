@@ -30,11 +30,13 @@ pan_1.jpg
   │
   └─[ Stage 5 ] pipeline/estimate_car_speed.py
                  EXIF focal metadata + 3400 mm wheelbase
-                 → car_speed.json / car_speed_wheels.png
+                 → car_speed.json / final_result.png
 ```
 
-By default, full runs and individual stages write to `outputs/<blurry_stem>/`
-(for example, `outputs/pan_1/` when the blurry image is `pan_1.jpg`).
+By default, full runs write to `outputs/<blurry_stem>__<sharp_stem>/`
+(for example, `outputs/pan_1__sharp_1/` for `pan_1.jpg` and `sharp_1.jpg`).
+When running stages individually, pass the same `--out_dir` to keep artifacts in
+the pair directory.
 
 ---
 
@@ -49,12 +51,12 @@ Isolates the F1 car so it is excluded from all background kernel estimates.
 - **SAM 2** refines those boxes into pixel-accurate instance masks.
 
 Outputs:
-- `outputs/pan_1/car_mask.png` — binary mask (255 = car, 0 = background)
-- `outputs/pan_1/car_detection.png` — overlay visualization
-- `outputs/pan_1/car_detection.json` — GroundingDINO car boxes used as Stage 5 crop metadata
+- `outputs/pan_1__sharp_1/car_mask.png` — binary mask (255 = car, 0 = background)
+- `outputs/pan_1__sharp_1/car_detection.png` — overlay visualization
+- `outputs/pan_1__sharp_1/car_detection.json` — GroundingDINO car boxes used as Stage 5 crop metadata
 
 ```bash
-python pipeline/segment_car.py --image pan_1.jpg
+python pipeline/segment_car.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
 ```
 
 ---
@@ -77,13 +79,13 @@ sharp pixel from the reference.
   vs. zero-padded fill, so Stage 3 can skip boundary patches.
 
 Outputs:
-- `outputs/pan_1/sharp_registered.png` — sharp reference in blurry image frame
-- `outputs/pan_1/sharp_registered_valid.png` — coverage mask (white = valid)
-- `outputs/pan_1/homography.npy` — 3×3 homography H (maps sharp → blurry)
-- `outputs/pan_1/registration_debug.png` — inlier match visualization
+- `outputs/pan_1__sharp_1/sharp_registered.png` — sharp reference in blurry image frame
+- `outputs/pan_1__sharp_1/sharp_registered_valid.png` — coverage mask (white = valid)
+- `outputs/pan_1__sharp_1/homography.npy` — 3×3 homography H (maps sharp → blurry)
+- `outputs/pan_1__sharp_1/registration_debug.png` — inlier match visualization
 
 ```bash
-python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg
+python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg --out_dir outputs/pan_1__sharp_1
 ```
 
 ---
@@ -168,15 +170,15 @@ confidence-weighted mean of all valid `b_px_pixel` estimates and applied to the
 `pan_1.jpg` without trajectory fitting.
 
 Outputs:
-- `outputs/pan_1/kernel_map.npz` — per-patch arrays: `b_px`, `b_px_spec`, `b_px_pixel`, `phi_deg`, `confidence`, texture metrics, `status`
-- `outputs/pan_1/kernel_map.csv` — same as CSV
-- `outputs/pan_1/kernel_map.png` — overlay: arrows show blur direction, colour encodes `b_px_pixel`
-- `outputs/pan_1/kernel_patch_grid.png` — 8×6 diagnostic grid (4 near-mean + 4 outlier patches)
-- `outputs/pan_1/uniform_traj.json` — global `(Bx, By, b, φ)` from weighted mean
-- `outputs/pan_1/uniform_trajectory_residual.png` — blurry | re-blurred | |residual|
+- `outputs/pan_1__sharp_1/kernel_map.npz` — per-patch arrays: `b_px`, `b_px_spec`, `b_px_pixel`, `phi_deg`, `confidence`, texture metrics, `status`
+- `outputs/pan_1__sharp_1/kernel_map.csv` — same as CSV
+- `outputs/pan_1__sharp_1/kernel_map.png` — overlay: arrows show blur direction, colour encodes `b_px_pixel`
+- `outputs/pan_1__sharp_1/kernel_patch_grid.png` — 8×6 diagnostic grid (4 near-mean + 4 outlier patches)
+- `outputs/pan_1__sharp_1/uniform_traj.json` — global `(Bx, By, b, φ)` from weighted mean
+- `outputs/pan_1__sharp_1/uniform_trajectory_residual.png` — blurry | re-blurred | |residual|
 
 ```bash
-python pipeline/kernel_estimation.py --blurry pan_1.jpg
+python pipeline/kernel_estimation.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1
 ```
 
 Key arguments:
@@ -223,12 +225,12 @@ angular velocity      ω = α / t_exposure        [rad/s]
 ```
 
 Outputs:
-- `outputs/pan_1/trajectory.json` — fitted parameters + physical quantities (ω in deg/s and rad/s)
-- `outputs/pan_1/trajectory_residual.png` — blurry | re-blurred sharp | |residual|
-- `outputs/pan_1/trajectory_scatter.png` — measured vs predicted `b` per patch + spatial residual map
+- `outputs/pan_1__sharp_1/trajectory.json` — fitted parameters + physical quantities (ω in deg/s and rad/s)
+- `outputs/pan_1__sharp_1/trajectory_residual.png` — blurry | re-blurred sharp | |residual|
+- `outputs/pan_1__sharp_1/trajectory_scatter.png` — measured vs predicted `b` per patch + spatial residual map
 
 ```bash
-python pipeline/trajectory_fitting.py --blurry pan_1.jpg --ransac_residual_thres 15
+python pipeline/trajectory_fitting.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1 --ransac_residual_thres 15
 ```
 
 ---
@@ -253,11 +255,12 @@ boxes with SAM2 masks. The measurement can still be overridden with
 `--left_wheel x y --right_wheel x y` or `--wheelbase_px`.
 
 Outputs:
-- `outputs/pan_1/car_speed.json` — depth, speed, focal source, wheelbase measurement, assumptions
-- `outputs/pan_1/car_speed_wheels.png` — wheel-center measurement overlay
+- `outputs/pan_1__sharp_1/car_speed.json` — depth, speed, focal source, wheelbase measurement, assumptions
+- `outputs/pan_1__sharp_1/car_speed_wheels.png` — wheel-center measurement overlay
+- `outputs/pan_1__sharp_1/final_result.png` — final speed estimation diagram with wheelbase, blur, pan rate, depth, and velocity
 
 ```bash
-python pipeline/estimate_car_speed.py --image pan_1.jpg
+python pipeline/estimate_car_speed.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
 ```
 
 ---
@@ -271,7 +274,7 @@ python pipeline/run_pipeline.py --blurry pan_1.jpg --sharp sharp_1.jpg
 ```
 
 The runner pins child processes to GPU 4 by default and writes all artifacts to
-`outputs/<blurry_stem>/` (for the command above, `outputs/pan_1/`). It skips
+`outputs/<blurry_stem>__<sharp_stem>/` (for the command above, `outputs/pan_1__sharp_1/`). It skips
 stages whose expected outputs already exist; add `--force` to rerun from scratch.
 
 Useful variants:
@@ -287,18 +290,18 @@ python pipeline/run_pipeline.py --start-at kernel --force
 python pipeline/run_pipeline.py --start-at speed --stop-after speed --left_wheel 1650 3350 --right_wheel 2320 3350
 
 # Run a fresh pipeline into a named subdirectory under outputs/.
-python pipeline/run_pipeline.py --out_dir outputs/pan_1_rerun --force
+python pipeline/run_pipeline.py --out_dir outputs/pan_1__sharp_1_rerun --force
 ```
 
 The stages can still be run individually for debugging. These commands use the
-same `outputs/pan_1/` run directory by default:
+same `outputs/pan_1__sharp_1/` run directory explicitly:
 
 ```bash
-python pipeline/segment_car.py --image pan_1.jpg
-python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg
-python pipeline/kernel_estimation.py --blurry pan_1.jpg
-python pipeline/trajectory_fitting.py --blurry pan_1.jpg
-python pipeline/estimate_car_speed.py --image pan_1.jpg
+python pipeline/segment_car.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
+python pipeline/register_reference.py --blurry pan_1.jpg --sharp sharp_1.jpg --out_dir outputs/pan_1__sharp_1
+python pipeline/kernel_estimation.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1
+python pipeline/trajectory_fitting.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1
+python pipeline/estimate_car_speed.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
 ```
 
 Camera constants (focal length, sensor size, exposure time) are hard-coded at
@@ -309,7 +312,7 @@ running.
 
 ## Output Summary
 
-Paths are relative to a run directory such as `outputs/pan_1/`.
+Paths are relative to a run directory such as `outputs/pan_1__sharp_1/`.
 
 | File | Stage | Description |
 |------|-------|-------------|
@@ -327,6 +330,7 @@ Paths are relative to a run directory such as `outputs/pan_1/`.
 | `trajectory_scatter.png` | 4 | Measured vs predicted scatter |
 | `car_speed.json` | 5 | Estimated car depth and speed |
 | `car_speed_wheels.png` | 5 | Wheel-center measurement overlay |
+| `final_result.png` | 5 | Final speed estimation diagram with wheelbase and motion metrics |
 
 ---
 

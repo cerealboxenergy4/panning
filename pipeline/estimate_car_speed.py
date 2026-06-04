@@ -10,7 +10,8 @@ selected wheel centers.
     speed_m_s = omega_rad_s * depth_m
 
 Manual wheel centers or a manual wheelbase in pixels can still be supplied when
-the detector needs correction.
+the detector needs correction. Stage 5 writes a wheel measurement overlay and a separate final result diagram
+with blur, pan rate, exposure, depth, and speed estimates.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from PIL import ExifTags, Image, ImageDraw, ImageOps
+from PIL import ExifTags, Image, ImageDraw, ImageFont, ImageOps
 
 
 EXIF_BY_NAME = {name: tag for tag, name in ExifTags.TAGS.items()}
@@ -366,30 +367,209 @@ def detect_wheels_grounded_sam(image: Image.Image, car_bbox: tuple[int, int, int
     return (float(left['x']), float(left['y'])), (float(right['x']), float(right['y'])), detail
 
 
-def draw_overlay(image: Image.Image, car_bbox: tuple[int, int, int, int] | None,
-                 left: tuple[float, float] | None, right: tuple[float, float] | None,
-                 wheelbase_px: float, out_path: Path) -> None:
-    vis = image.copy().convert('RGB')
-    draw = ImageDraw.Draw(vis)
+def load_font(size: int, bold: bool = False):
+    names = ['DejaVuSans-Bold.ttf'] if bold else ['DejaVuSans.ttf']
+    paths = [
+        Path('/usr/share/fonts/truetype/dejavu') / name
+        for name in names
+    ]
+    for font_path in paths:
+        try:
+            return ImageFont.truetype(str(font_path), size=size)
+        except OSError:
+            pass
+    return ImageFont.load_default()
+
+
+def text_with_shadow(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str,
+                     font, fill: tuple[int, int, int, int], shadow_alpha: int = 180) -> None:
+    x, y = xy
+    draw.text((x + 3, y + 3), text, font=font, fill=(0, 0, 0, shadow_alpha))
+    draw.text((x, y), text, font=font, fill=fill)
+
+
+def format_exposure(exposure_s: float | None) -> str:
+    if exposure_s is None or exposure_s <= 0:
+        return 'n/a'
+    inv = 1.0 / exposure_s
+    if abs(inv - round(inv)) <= 0.02 * max(inv, 1.0):
+        return f'1/{int(round(inv))} s  ({exposure_s * 1000:.1f} ms)'
+    return f'{exposure_s:.4f} s  ({exposure_s * 1000:.1f} ms)'
+
+
+def draw_wheel_overlay(image: Image.Image, car_bbox: tuple[int, int, int, int] | None,
+                       left: tuple[float, float] | None, right: tuple[float, float] | None,
+                       wheelbase_px: float, out_path: Path) -> None:
+    vis = image.copy().convert('RGBA')
+    overlay = Image.new('RGBA', vis.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    W, H = vis.size
+
     if car_bbox is not None:
-        draw.rectangle(car_bbox, outline=(80, 255, 120), width=6)
+        x0, y0, x1, y1 = car_bbox
+        draw.rectangle((x0, y0, x1, y1), fill=(80, 255, 120, 22), outline=(0, 0, 0, 170), width=13)
+        draw.rectangle((x0, y0, x1, y1), outline=(92, 255, 130, 245), width=7)
+
     if left is not None and right is not None:
         lx, ly = left
         rx, ry = right
-        draw.line((lx, ly, rx, ry), fill=(255, 220, 40), width=8)
+        draw.line((lx, ly, rx, ry), fill=(0, 0, 0, 190), width=18)
+        draw.line((lx, ly, rx, ry), fill=(255, 214, 48, 255), width=10)
+        label_font = load_font(max(24, int(min(W, H) * 0.008)), bold=True)
         for label, (x, y), color in [
-            ('L', (lx, ly), (60, 220, 255)),
-            ('R', (rx, ry), (255, 90, 80)),
+            ('L', (lx, ly), (77, 220, 255, 255)),
+            ('R', (rx, ry), (255, 96, 88, 255)),
         ]:
-            r = 34
-            draw.ellipse((x - r, y - r, x + r, y + r), outline=color, width=8)
-            draw.ellipse((x - 5, y - 5, x + 5, y + 5), fill=color)
-            draw.text((x + 42, y - 42), label, fill=color)
-        mx, my = (lx + rx) / 2.0, (ly + ry) / 2.0
-        draw.text((mx - 90, my - 60), f'{wheelbase_px:.1f} px', fill=(255, 220, 40))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    vis.save(out_path)
+            r = max(30, int(min(W, H) * 0.009))
+            draw.ellipse((x - r - 5, y - r - 5, x + r + 5, y + r + 5), fill=(0, 0, 0, 150))
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=(8, 13, 18, 230), outline=color, width=7)
+            draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=color)
+            text_with_shadow(draw, (x + r + 12, y - r - 4), label, label_font, color)
 
+        mx, my = (lx + rx) / 2.0, (ly + ry) / 2.0
+        wheelbase_label = f'wheelbase  {wheelbase_px:.1f} px'
+        bbox = draw.textbbox((0, 0), wheelbase_label, font=label_font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        pad = 14
+        label_xy = (mx - tw / 2.0 - pad, my - th - 64)
+        draw.rounded_rectangle(
+            (label_xy[0], label_xy[1], label_xy[0] + tw + 2 * pad, label_xy[1] + th + 2 * pad),
+            radius=18,
+            fill=(8, 12, 18, 210),
+            outline=(255, 214, 48, 190),
+            width=3,
+        )
+        text_with_shadow(draw, (label_xy[0] + pad, label_xy[1] + pad - 2), wheelbase_label, label_font, (255, 232, 92, 255))
+
+    composed = Image.alpha_composite(vis, overlay).convert('RGB')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    composed.save(out_path, quality=95)
+
+
+def draw_final_result(image: Image.Image, car_bbox: tuple[int, int, int, int] | None,
+                      left: tuple[float, float] | None, right: tuple[float, float] | None,
+                      wheelbase_px: float, out_path: Path,
+                      trajectory: dict[str, Any] | None = None,
+                      speed: dict[str, Any] | None = None) -> None:
+    vis = image.copy().convert('RGBA')
+    overlay = Image.new('RGBA', vis.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    W, H = vis.size
+    margin = max(28, int(min(W, H) * 0.01))
+
+    if car_bbox is not None:
+        x0, y0, x1, y1 = car_bbox
+        draw.rectangle((x0, y0, x1, y1), fill=(80, 255, 120, 28), outline=(4, 18, 8, 180), width=14)
+        draw.rectangle((x0, y0, x1, y1), outline=(92, 255, 130, 245), width=7)
+
+    if left is not None and right is not None:
+        lx, ly = left
+        rx, ry = right
+        draw.line((lx, ly, rx, ry), fill=(0, 0, 0, 190), width=18)
+        draw.line((lx, ly, rx, ry), fill=(255, 214, 48, 255), width=10)
+        dot_font = load_font(max(24, int(min(W, H) * 0.008)), bold=True)
+        for label, (x, y), color in [
+            ('L', (lx, ly), (77, 220, 255, 255)),
+            ('R', (rx, ry), (255, 96, 88, 255)),
+        ]:
+            r = max(30, int(min(W, H) * 0.009))
+            draw.ellipse((x - r - 5, y - r - 5, x + r + 5, y + r + 5), fill=(0, 0, 0, 150))
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=(8, 13, 18, 230), outline=color, width=7)
+            draw.ellipse((x - 7, y - 7, x + 7, y + 7), fill=color)
+            text_with_shadow(draw, (x + r + 12, y - r - 4), label, dot_font, color)
+
+        mx, my = (lx + rx) / 2.0, (ly + ry) / 2.0
+        label_font = load_font(max(24, int(min(W, H) * 0.008)), bold=True)
+        wheelbase_label = f'wheelbase  {wheelbase_px:.1f} px'
+        bbox = draw.textbbox((0, 0), wheelbase_label, font=label_font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        pad = 14
+        label_xy = (mx - tw / 2.0 - pad, my - th - 64)
+        draw.rounded_rectangle(
+            (label_xy[0], label_xy[1], label_xy[0] + tw + 2 * pad, label_xy[1] + th + 2 * pad),
+            radius=18,
+            fill=(8, 12, 18, 210),
+            outline=(255, 214, 48, 190),
+            width=3,
+        )
+        text_with_shadow(draw, (label_xy[0] + pad, label_xy[1] + pad - 2), wheelbase_label, label_font, (255, 232, 92, 255))
+
+    trajectory = trajectory or {}
+    speed = speed or {}
+    if car_bbox is not None:
+        x0, y0, x1, y1 = car_bbox
+        right_space = W - x1 - 2 * margin
+        desired_w = min(940, max(540, int(W * 0.18)))
+        panel_w = min(desired_w, max(440, right_space))
+        if right_space >= 440:
+            panel_x = x1 + margin
+        else:
+            panel_w = min(desired_w, max(440, x0 - 2 * margin))
+            panel_x = max(margin, x0 - margin - panel_w)
+        panel_h = min(max(560, int(H * 0.15)), H - 2 * margin)
+        panel_y = min(max(y0, margin), H - panel_h - margin)
+    else:
+        panel_w = min(940, max(540, int(W * 0.22)))
+        panel_h = min(max(560, int(H * 0.15)), H - 2 * margin)
+        panel_x = W - panel_w - margin
+        panel_y = margin
+
+    panel_x2 = min(W - margin, panel_x + panel_w)
+    panel_w = panel_x2 - panel_x
+    panel_y2 = min(H - margin, panel_y + panel_h)
+    panel_h = panel_y2 - panel_y
+    draw.rounded_rectangle(
+        (panel_x, panel_y, panel_x + panel_w, panel_y + panel_h),
+        radius=max(20, int(panel_w * 0.035)),
+        fill=(6, 10, 16, 224),
+        outline=(255, 255, 255, 82),
+        width=3,
+    )
+    draw.rectangle((panel_x, panel_y, panel_x + 10, panel_y + panel_h), fill=(255, 214, 48, 235))
+
+    if car_bbox is not None:
+        x0, y0, x1, y1 = car_bbox
+        anchor_y = y0 + 0.18 * (y1 - y0)
+        draw.line((x1, anchor_y, panel_x, panel_y + 46), fill=(255, 214, 48, 180), width=4)
+
+    base = max(18, min(34, int(panel_w / 18), int(min(W, H) / 115)))
+    title_font = load_font(base + 8, bold=True)
+    label_font = load_font(max(15, base - 6), bold=True)
+    value_font = load_font(base, bold=True)
+    velocity_label_font = load_font(max(base - 1, label_font.size + 5 if hasattr(label_font, 'size') else base), bold=True)
+    velocity_value_font = load_font(base + 20, bold=True)
+    sub_font = load_font(max(14, base - 7), bold=False)
+
+    x = panel_x + max(28, int(panel_w * 0.06))
+    y = panel_y + max(24, int(panel_h * 0.045))
+    text_with_shadow(draw, (x, y), 'FINAL SPEED ESTIMATION', title_font, (246, 250, 255, 255))
+    y += base + 24
+    draw.line((x, y, panel_x + panel_w - 28, y), fill=(255, 214, 48, 190), width=3)
+    y += max(20, int(base * 0.75))
+
+    stats = [
+        ('Global blur kernel', f"{float(trajectory.get('b_total_px', float('nan'))):.1f} px", None, False),
+        ('Angular velocity', f"{float(trajectory.get('omega_deg_s', speed.get('omega_deg_s', float('nan')))):.1f} deg/s", None, False),
+        ('Exposure time', format_exposure(trajectory.get('exposure_s')), None, False),
+        ('Estimated depth', f"{float(speed.get('depth_m', float('nan'))):.2f} m", None, False),
+        ('Vehicle velocity', f"{float(speed.get('speed_km_h', float('nan'))):.1f} km/h", f"{float(speed.get('speed_mph', float('nan'))):.1f} mph", True),
+    ]
+
+    for label, value, sub, emphasize in stats:
+        current_label_font = velocity_label_font if emphasize else label_font
+        current_value_font = velocity_value_font if emphasize else value_font
+        draw.text((x, y), label.upper(), font=current_label_font, fill=(143, 166, 190, 255))
+        y += max(18, int(current_label_font.size * 0.86) if hasattr(current_label_font, 'size') else int(base * 0.70))
+        text_with_shadow(draw, (x, y), value, current_value_font, (255, 255, 255, 255))
+        y += max(24, int(current_value_font.size * 1.12) if hasattr(current_value_font, 'size') else int(base * 1.05))
+        if sub:
+            draw.text((x, y), sub, font=sub_font, fill=(188, 202, 216, 240))
+            y += max(22, int(base * 0.86))
+        y += max(10, int(base * 0.30))
+
+    composed = Image.alpha_composite(vis, overlay).convert('RGB')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    composed.save(out_path, quality=95)
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
@@ -477,7 +657,7 @@ def main() -> int:
     speed_mph = speed_m_s * 2.2369362920544
 
     overlay_path = out_dir / 'car_speed_wheels.png'
-    draw_overlay(image, car_bbox, left, right, wheelbase_px, overlay_path)
+    final_result_path = out_dir / 'final_result.png'
 
     result = {
         'speed_m_s': float(speed_m_s),
@@ -498,8 +678,12 @@ def main() -> int:
         ],
         'outputs': {
             'wheel_overlay': str(overlay_path),
+            'final_result': str(final_result_path),
         },
     }
+
+    draw_wheel_overlay(image, car_bbox, left, right, wheelbase_px, overlay_path)
+    draw_final_result(image, car_bbox, left, right, wheelbase_px, final_result_path, trajectory=trajectory, speed=result)
 
     out_path = out_dir / 'car_speed.json'
     with open(out_path, 'w') as f:
@@ -511,6 +695,7 @@ def main() -> int:
     print(f"Estimated speed: {speed_km_h:.1f} km/h  ({speed_mph:.1f} mph)")
     print(f"Saved: {out_path}")
     print(f"Saved: {overlay_path}")
+    print(f"Saved: {final_result_path}")
     return 0
 
 

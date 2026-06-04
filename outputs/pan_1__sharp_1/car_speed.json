@@ -368,6 +368,7 @@
     "wheel centers are measured in the panning image coordinate frame"
   ],
   "outputs": {
-    "wheel_overlay": "outputs/pan_1/car_speed_wheels.png"
+    "wheel_overlay": "outputs/pan_1__sharp_1/car_speed_wheels.png",
+    "final_result": "outputs/pan_1__sharp_1/final_result.png"
   }
 }
