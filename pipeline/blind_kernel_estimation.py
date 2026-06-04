@@ -121,6 +121,7 @@ def save_kernel_npz(records: list[dict], path: Path) -> None:
         y0=np.array([r['y0'] for r in records]),
         cx=np.array([r['cx'] for r in records]),
         cy=np.array([r['cy'] for r in records]),
+        patch_size=np.array([r['patch_size'] for r in records]),
         b_px=np.array([r['b_px'] if r['b_px'] is not None else np.nan for r in records]),
         b_px_spec=np.array([r['b_px_spec'] if r['b_px_spec'] is not None else np.nan for r in records]),
         b_px_pixel=np.array([r['b_px_pixel'] if r['b_px_pixel'] is not None else np.nan for r in records]),

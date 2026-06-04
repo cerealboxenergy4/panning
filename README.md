@@ -230,10 +230,13 @@ Outputs:
 - `outputs/pan_1__sharp_1/trajectory.json` — fitted parameters + physical quantities (ω in deg/s and rad/s)
 - `outputs/pan_1__sharp_1/trajectory_residual.png` — blurry | re-blurred sharp | |residual|
 - `outputs/pan_1__sharp_1/trajectory_scatter.png` — measured vs predicted `b` per patch + spatial residual map
+- `outputs/pan_1__sharp_1/kernel_contribution_map.png` — patch overlay showing RANSAC inliers/outliers and weighted contribution to the final blur length
 
 ```bash
 python pipeline/trajectory_fitting.py --blurry pan_1.jpg --out_dir outputs/pan_1__sharp_1 --ransac_residual_thres 15
 ```
+
+Use `--manual_blur_px 140` to annotate an eyeballed blur-length reference on `kernel_contribution_map.png`.
 
 ---
 
@@ -347,6 +350,7 @@ Paths are relative to a run directory such as `outputs/pan_1__sharp_1/`.
 | `trajectory.json` | 4 | Fitted B, φ, ω |
 | `trajectory_residual.png` | 4 | Full-image re-blur residual |
 | `trajectory_scatter.png` | 4 | Measured vs predicted scatter |
+| `kernel_contribution_map.png` | 4 | Patch contributions to the final blur length |
 | `car_speed.json` | 5 | Estimated car depth and speed |
 | `car_speed_wheels.png` | 5 | Wheel-center measurement overlay |
 | `final_result.png` | 5 | Final speed estimation diagram with wheelbase and motion metrics |

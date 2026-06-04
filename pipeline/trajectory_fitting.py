@@ -24,6 +24,7 @@ Outputs:
   outputs/<blurry_stem>/trajectory.json          — fitted parameters + physical quantities
   outputs/<blurry_stem>/trajectory_residual.png  — blurry | re-blurred | |residual| comparison
   outputs/<blurry_stem>/trajectory_scatter.png   — measured vs predicted b per patch
+  outputs/<blurry_stem>/kernel_contribution_map.png — per-patch contribution to final b
 """
 
 import argparse
@@ -35,6 +36,8 @@ from scipy.ndimage import rotate as nd_rotate, uniform_filter1d
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib import colors
+from matplotlib.patches import Rectangle
 
 # ── Camera constants (from EXIF) ─────────────────────────────────────────────
 FOCAL_MM    = 31.0
@@ -206,6 +209,194 @@ def apply_motion_blur(gray_float, b_px, phi_deg):
     return nd_rotate(blurred_rot, phi_deg, reshape=False, mode='reflect')
 
 
+
+def save_kernel_contribution_map(
+    blur_rgb,
+    kernel_data,
+    ok_mask,
+    b_arr,
+    phi_arr,
+    weights,
+    keep,
+    residuals,
+    B_x,
+    B_y,
+    b_total,
+    phi_fit,
+    final_wrmse,
+    weight_field,
+    out_path,
+    manual_blur_px=None,
+):
+    """
+    Draw how each patch contributed to the final fitted blur length.
+
+    Contribution is the normalized inlier weight times the measured patch blur
+    projected onto the final fitted blur direction. Rejected patches are shown
+    but contribute zero to the final length.
+    """
+    del B_x, B_y  # The scalar contribution view is along the fitted |B| axis.
+    H, W = blur_rgb.shape[:2]
+    n_all = len(kernel_data['status'])
+    ok_idx = np.flatnonzero(ok_mask)
+
+    x0_all = kernel_data['x0'].astype(float)
+    y0_all = kernel_data['y0'].astype(float)
+    cx_all = kernel_data['cx'].astype(float)
+    cy_all = kernel_data['cy'].astype(float)
+    if 'patch_size' in kernel_data.files:
+        patch_sizes = kernel_data['patch_size'].astype(float)
+    else:
+        half_sizes = np.concatenate([cx_all - x0_all, cy_all - y0_all])
+        half_sizes = half_sizes[np.isfinite(half_sizes) & (half_sizes > 0)]
+        fallback_size = float(np.median(half_sizes) * 2.0) if half_sizes.size else 400.0
+        patch_sizes = np.full(n_all, fallback_size, dtype=float)
+
+    inlier_w = np.zeros_like(b_arr, dtype=float)
+    if np.any(keep):
+        inlier_w[keep] = normalize_weights(weights[keep])
+
+    projected = b_arr * np.cos(np.radians(phi_arr - phi_fit))
+    contribution = np.zeros_like(b_arr, dtype=float)
+    contribution[keep] = inlier_w[keep] * projected[keep]
+
+    fig_w = 16
+    fig_h = max(7.0, fig_w * H / max(W, 1))
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.imshow(blur_rgb)
+    ax.add_patch(Rectangle((0, 0), W, H, facecolor='black', edgecolor='none', alpha=0.18))
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.axis('off')
+    ax.set_title(
+        f'Patch contributions to final blur kernel | fit={b_total:.1f}px',
+        fontsize=15,
+        pad=12,
+    )
+
+    inlier_contrib = contribution[keep] if np.any(keep) else np.array([0.0])
+    vmax = max(float(np.nanmax(inlier_contrib)) if inlier_contrib.size else 0.0, 1.0)
+    norm = colors.Normalize(vmin=0.0, vmax=vmax)
+    cmap = plt.get_cmap('turbo')
+
+    # Faint skipped patch rectangles keep this aligned with the original kernel_map.png grid.
+    for i in range(n_all):
+        if ok_mask[i]:
+            continue
+        ax.add_patch(Rectangle(
+            (x0_all[i], y0_all[i]), patch_sizes[i], patch_sizes[i],
+            fill=False, edgecolor='white', linewidth=0.45, alpha=0.18,
+        ))
+
+    for local_i, all_i in enumerate(ok_idx):
+        x0 = x0_all[all_i]
+        y0 = y0_all[all_i]
+        P = patch_sizes[all_i]
+        cx = cx_all[all_i]
+        cy = cy_all[all_i]
+        phi_r = np.radians(phi_arr[local_i])
+        dx = np.cos(phi_r) * P * 0.24
+        dy = np.sin(phi_r) * P * 0.24
+
+        if keep[local_i]:
+            color = cmap(norm(contribution[local_i]))
+            ax.add_patch(Rectangle(
+                (x0, y0), P, P,
+                facecolor=color, edgecolor='white',
+                linewidth=1.4, alpha=0.34,
+            ))
+            ax.annotate(
+                '',
+                xy=(cx + dx, cy + dy),
+                xytext=(cx - dx, cy - dy),
+                arrowprops=dict(
+                    arrowstyle='->',
+                    color='white',
+                    linewidth=2.1,
+                    shrinkA=0,
+                    shrinkB=0,
+                ),
+            )
+            label = (
+                f"b {b_arr[local_i]:.0f}px\n"
+                f"w {inlier_w[local_i] * 100:.1f}%\n"
+                f"+{contribution[local_i]:.1f}px"
+            )
+            ax.text(
+                cx,
+                cy,
+                label,
+                ha='center',
+                va='center',
+                color='white',
+                fontsize=8,
+                linespacing=1.0,
+                bbox=dict(facecolor='black', edgecolor='none', alpha=0.62, pad=2.4),
+            )
+        else:
+            ax.add_patch(Rectangle(
+                (x0, y0), P, P,
+                fill=False, edgecolor='#ff4d4d',
+                linewidth=1.6, alpha=0.85,
+            ))
+            ax.plot(
+                [x0 + P * 0.18, x0 + P * 0.82],
+                [y0 + P * 0.18, y0 + P * 0.82],
+                color='#ff4d4d',
+                linewidth=1.5,
+                alpha=0.85,
+            )
+            ax.plot(
+                [x0 + P * 0.82, x0 + P * 0.18],
+                [y0 + P * 0.18, y0 + P * 0.82],
+                color='#ff4d4d',
+                linewidth=1.5,
+                alpha=0.85,
+            )
+            ax.text(
+                cx,
+                cy,
+                f"rejected\nb {b_arr[local_i]:.0f}px\nres {residuals[local_i]:+.0f}px",
+                ha='center',
+                va='center',
+                color='white',
+                fontsize=7,
+                linespacing=1.0,
+                bbox=dict(facecolor='#240000', edgecolor='none', alpha=0.68, pad=2.2),
+            )
+
+    summary = [
+        f'global blur: {b_total:.1f} px',
+        f'direction: {phi_fit:.1f} deg',
+        f'inliers: {int(keep.sum())}/{len(b_arr)}',
+        f'weighted RMSE: {final_wrmse:.1f} px',
+        f'weight field: {weight_field}',
+    ]
+    if manual_blur_px is not None:
+        summary.append(f'manual reference: {manual_blur_px:.1f} px')
+        summary.append(f'fit - manual: {b_total - manual_blur_px:+.1f} px')
+    ax.text(
+        W * 0.012,
+        H * 0.035,
+        '\n'.join(summary),
+        ha='left',
+        va='top',
+        color='white',
+        fontsize=11,
+        linespacing=1.2,
+        bbox=dict(facecolor='black', edgecolor='white', linewidth=0.5, alpha=0.68, pad=6.0),
+    )
+
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, fraction=0.025, pad=0.018)
+    cbar.set_label('Weighted projected contribution to final b (px)')
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -235,6 +426,8 @@ def main():
                    help='Random seed for reproducible RANSAC sampling')
     p.add_argument('--weight_field', default='confidence',
                    help='Kernel-map field to use as WLS/RANSAC weights, e.g. confidence or grad_mag_var')
+    p.add_argument('--manual_blur_px', type=float, default=None,
+                   help='Optional manual blur length reference annotated on kernel_contribution_map.png')
     args = p.parse_args()
 
     if args.out_dir is not None:
@@ -347,6 +540,10 @@ def main():
         'pixel_pitch_mm': float(PIXEL_PITCH),
         'focal_px': float(f_px),
     }
+    if args.manual_blur_px is not None:
+        result['manual_blur_px'] = float(args.manual_blur_px)
+        result['manual_vs_fitted_delta_px'] = float(b_total - args.manual_blur_px)
+
     traj_path = out_dir / 'trajectory.json'
     with open(traj_path, 'w') as f:
         json.dump(result, f, indent=2)
@@ -359,6 +556,15 @@ def main():
             dtype=np.float32)
 
     blur_gray = load_gray(args.blurry)
+    blur_rgb = np.array(ImageOps.exif_transpose(Image.open(args.blurry)).convert('RGB'))
+
+    contrib_path = out_dir / 'kernel_contribution_map.png'
+    save_kernel_contribution_map(
+        blur_rgb, data, ok, b_arr, phi_arr, conf_arr, keep, all_res, B_x, B_y,
+        b_total, phi_fit, final_wrmse, weight_field, contrib_path,
+        manual_blur_px=args.manual_blur_px,
+    )
+    print(f"Saved: {contrib_path}")
 
     if args.skip_residual_image:
         print('Skipping trajectory_residual.png because --skip_residual_image was supplied.')

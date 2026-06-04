@@ -114,6 +114,7 @@ def main() -> int:
     parser.add_argument('--blind_score_thres', type=float, default=0.03)
     parser.add_argument('--weight_field', default='confidence')
     parser.add_argument('--disable_ransac', action='store_true')
+    parser.add_argument('--manual_blur_px', type=float, default=None, help='Optional human-estimated blur length annotated on the contribution map.')
     parser.add_argument('--ransac_iters', type=int, default=256)
     parser.add_argument('--ransac_min_samples', type=int, default=3)
     parser.add_argument('--ransac_residual_thres', type=float, default=15.0)
@@ -187,8 +188,9 @@ def main() -> int:
                 '--ransac_residual_thres', str(args.ransac_residual_thres),
                 '--ransac_seed', str(args.ransac_seed),
             ]
+            + ([] if args.manual_blur_px is None else ['--manual_blur_px', str(args.manual_blur_px)])
             + (['--disable_ransac'] if args.disable_ransac else []),
-            outputs=[trajectory_json, out_dir / 'trajectory_scatter.png'],
+            outputs=[trajectory_json, out_dir / 'trajectory_scatter.png', out_dir / 'kernel_contribution_map.png'],
         ),
         Stage(
             key='speed',
