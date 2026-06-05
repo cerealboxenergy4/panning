@@ -27,9 +27,9 @@ from scipy.ndimage import median_filter, rotate as nd_rotate
 from scipy.optimize import minimize_scalar
 
 try:
-    from .kernel_estimation import estimate_blur_direction, load_gray_rgb, patch_structure_metrics
+    from .kernel_estimation import estimate_blur_direction, load_gray_rgb, load_optional_binary_mask, patch_structure_metrics
 except ImportError:  # pragma: no cover - supports `python pipeline/blind_kernel_estimation.py`
-    from kernel_estimation import estimate_blur_direction, load_gray_rgb, patch_structure_metrics
+    from kernel_estimation import estimate_blur_direction, load_gray_rgb, load_optional_binary_mask, patch_structure_metrics
 
 
 def robust_zscore(values: np.ndarray) -> np.ndarray:
@@ -135,6 +135,7 @@ def save_kernel_npz(records: list[dict], path: Path) -> None:
         harris_mean=np.array([r['harris_mean'] if r['harris_mean'] is not None else 0.0 for r in records]),
         texture_score=np.array([r['texture_score'] if r['texture_score'] is not None else 0.0 for r in records]),
         car_frac=np.array([r['car_frac'] for r in records]),
+        exclude_frac=np.array([r['exclude_frac'] for r in records]),
         status=np.array([r['status'] for r in records]),
         estimator=np.array(['blind_spectral_notch'] * len(records)),
     )
@@ -142,7 +143,7 @@ def save_kernel_npz(records: list[dict], path: Path) -> None:
 
 def save_csv(records: list[dict], path: Path) -> None:
     fields = [
-        'row', 'col', 'x0', 'y0', 'cx', 'cy', 'patch_size', 'car_frac',
+        'row', 'col', 'x0', 'y0', 'cx', 'cy', 'patch_size', 'car_frac', 'exclude_frac',
         'grad_energy', 'grad_mag_var', 'grad_p95', 'harris_max', 'harris_mean',
         'texture_score', 'blind_score', 'b_px', 'b_px_spec', 'b_px_pixel',
         'phi_deg', 'confidence', 'status',
@@ -173,6 +174,7 @@ def save_overlay(blur_rgb: np.ndarray, records: list[dict], valid: list[dict], o
     status_color = {
         'ok': 'white',
         'skip_car': 'red',
+        'skip_excluded_region': '#f2c94c',
         'skip_flat_blurry': '0.45',
         'skip_low_texture': '0.55',
         'skip_no_corner': 'cyan',
@@ -226,6 +228,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--blurry', default='pan_1.jpg')
     p.add_argument('--car_mask', default=None, help='Car mask path; defaults to <out_dir>/car_mask.png')
+    p.add_argument('--exclude_mask', default=None,
+                   help='Optional binary mask for background regions to exclude, e.g. track_mask.png')
+    p.add_argument('--exclude_overlap_thres', type=float, default=0.25,
+                   help='Skip patch if >this fraction overlaps the exclusion mask')
     p.add_argument('--patch_size', type=int, default=400)
     p.add_argument('--grad_energy_thres', type=float, default=100.0,
                    help='Minimum Sobel energy in the blurred patch.')
@@ -255,6 +261,10 @@ def main() -> int:
 
     blur_rgb, blur_gray = load_gray_rgb(args.blurry)
     car_mask = np.array(Image.open(args.car_mask).convert('L')) > 127
+    exclude_mask, exclude_mask_path = load_optional_binary_mask(
+        args.exclude_mask, blur_gray.shape, 'exclusion'
+    )
+    print(f'Exclusion mask: {exclude_mask_path or "none"}  fraction={float(exclude_mask.mean()):.3f}')
     H, W = blur_gray.shape
     P = int(args.patch_size)
     n_rows, n_cols = H // P, W // P
@@ -264,7 +274,7 @@ def main() -> int:
         global_phi = float(args.global_phi)
         print(f'Using supplied global blur direction: {global_phi:.2f} deg')
     else:
-        global_phi, peak_score = estimate_blur_direction(blur_gray, weight_mask=~car_mask)
+        global_phi, peak_score = estimate_blur_direction(blur_gray, weight_mask=(~car_mask) & (~exclude_mask))
         if global_phi is None:
             raise ValueError('Could not estimate blur direction from the blurred image.')
         print(f'Global blur direction: {global_phi:.2f} deg  (peak_score={peak_score:.1f})')
@@ -276,10 +286,12 @@ def main() -> int:
             y0, x0 = row * P, col * P
             blur_p = blur_gray[y0:y0 + P, x0:x0 + P]
             car_p = car_mask[y0:y0 + P, x0:x0 + P]
+            exclude_p = exclude_mask[y0:y0 + P, x0:x0 + P]
             rec = {
                 'row': row, 'col': col, 'x0': x0, 'y0': y0,
                 'cx': x0 + P / 2.0, 'cy': y0 + P / 2.0, 'patch_size': P,
                 'car_frac': float(car_p.mean()),
+                'exclude_frac': float(exclude_p.mean()),
                 'b_px': None, 'b_px_spec': None, 'b_px_pixel': None,
                 'phi_deg': global_phi, 'confidence': None, 'blind_score': None,
                 'grad_energy': None, 'grad_mag_var': None, 'grad_p95': None,
@@ -288,6 +300,10 @@ def main() -> int:
             }
             if rec['car_frac'] > args.car_overlap_thres:
                 rec['status'] = 'skip_car'
+                records.append(rec)
+                continue
+            if rec['exclude_frac'] > args.exclude_overlap_thres:
+                rec['status'] = 'skip_excluded_region'
                 records.append(rec)
                 continue
 

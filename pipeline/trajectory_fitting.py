@@ -238,6 +238,9 @@ def save_kernel_contribution_map(
     residuals,
     B_x,
     B_y,
+    initial_b_total,
+    initial_phi_fit,
+    initial_wrmse,
     b_total,
     phi_fit,
     final_wrmse,
@@ -286,7 +289,7 @@ def save_kernel_contribution_map(
     ax.set_ylim(H, 0)
     ax.axis('off')
     ax.set_title(
-        f'Patch contributions to final blur kernel | fit={b_total:.1f}px',
+        f'Patch contributions | initial={initial_b_total:.1f}px | refined={b_total:.1f}px',
         fontsize=15,
         pad=12,
     )
@@ -383,10 +386,14 @@ def save_kernel_contribution_map(
             )
 
     summary = [
-        f'global blur: {b_total:.1f} px',
-        f'direction: {phi_fit:.1f} deg',
+        f'initial all-patch b: {initial_b_total:.1f} px',
+        f'initial direction: {initial_phi_fit:.1f} deg',
+        f'initial RMSE: {initial_wrmse:.1f} px',
+        f'RANSAC refined b: {b_total:.1f} px',
+        f'refined direction: {phi_fit:.1f} deg',
+        f'refined - initial: {b_total - initial_b_total:+.1f} px',
         f'inliers: {int(keep.sum())}/{len(b_arr)}',
-        f'weighted RMSE: {final_wrmse:.1f} px',
+        f'refined RMSE: {final_wrmse:.1f} px',
         f'weight field: {weight_field}',
     ]
     if manual_blur_px is not None:
@@ -510,6 +517,11 @@ def main():
           f"φ: {phi_arr.mean():.1f} ± {phi_arr.std():.1f}°)")
 
     print(f"Weight field: {weight_field}")
+    initial_B_x, initial_B_y, initial_res, initial_wrmse = fit_trajectory_wls(
+        b_arr, phi_arr, conf_arr, verbose=False
+    )
+    initial_b_total = float(np.sqrt(initial_B_x ** 2 + initial_B_y ** 2))
+    initial_phi_fit = float(np.degrees(np.arctan2(initial_B_y, initial_B_x)) % 180.0)
 
     # ── Robust fit + outlier rejection ────────────────────────────────────────
     ransac_info = {}
@@ -578,6 +590,9 @@ def main():
         'n_patches_total': int(ok.sum()),
         'n_patches_inlier': int(len(b_used)),
         'n_outliers': n_out,
+        'initial_b_total_px': initial_b_total,
+        'initial_phi_deg': initial_phi_fit,
+        'initial_weighted_rmse_px': float(initial_wrmse),
         'weighted_rmse_px': float(final_wrmse),
         'fit_method': fit_method,
         'weight_field': weight_field,
@@ -616,6 +631,7 @@ def main():
     contrib_path = out_dir / 'kernel_contribution_map.png'
     save_kernel_contribution_map(
         blur_rgb, data, ok, b_arr, phi_arr, conf_arr, keep, all_res, B_x, B_y,
+        initial_b_total, initial_phi_fit, initial_wrmse,
         b_total, phi_fit, final_wrmse, weight_field, contrib_path,
         manual_blur_px=args.manual_blur_px,
     )

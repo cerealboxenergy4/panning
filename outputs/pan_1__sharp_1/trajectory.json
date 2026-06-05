@@ -1,24 +1,147 @@
 {
-  "B_x_px": 129.21229791772976,
-  "B_y_px": 0.5637985861640615,
-  "b_total_px": 129.21352793738708,
-  "phi_deg": 0.25000000000000006,
-  "alpha_mrad": 16.32536508886342,
-  "omega_deg_s": 116.92181482526128,
-  "omega_rad_s": 2.0406706361079276,
+  "B_x_px": 125.40265195814271,
+  "B_y_px": 0.5471757643397148,
+  "b_total_px": 125.40384571237101,
+  "phi_deg": 0.24999999999999994,
+  "alpha_mrad": 24.535535030681284,
+  "omega_deg_s": 175.7228256691778,
+  "omega_rad_s": 3.0669418788351606,
   "n_patches_total": 49,
   "n_patches_inlier": 23,
   "n_outliers": 26,
-  "weighted_rmse_px": 6.652305501794962,
+  "weighted_rmse_px": 8.633736823801177,
   "fit_method": "weighted_ransac_wls",
   "weight_field": "confidence",
   "ransac_iterations": 256,
   "ransac_min_samples": 3,
   "ransac_residual_thres_px": 15.0,
-  "ransac_inlier_weight": 0.5569675424522248,
+  "ransac_inlier_weight": 0.4829483381598933,
   "exposure_s": 0.008,
+  "exposure_source": "exif_exposure_time",
   "focal_mm": 31.0,
-  "sensor_w_mm": 23.5,
-  "pixel_pitch_mm": 0.003916666666666666,
-  "focal_px": 7914.893617021277
+  "sensor_w_mm": 36.0,
+  "pixel_pitch_mm": 0.009,
+  "focal_px": 5111.111111111111,
+  "focal_source": "exif_35mm_equivalent",
+  "camera_metadata": {
+    "blurry": {
+      "path": "pan_1.jpg",
+      "width_px": 4000,
+      "height_px": 6000,
+      "make": "SONY",
+      "model": "ILCE-5100",
+      "lens_model": "E PZ 16-50mm F3.5-5.6 OSS",
+      "orientation": 8,
+      "datetime_original": "2026:03:28 15:58:23",
+      "exif_focal_mm": 31.0,
+      "exif_focal_35mm": 46.0,
+      "exif_exposure_s": 0.008,
+      "exif_exposure_source": "exif_exposure_time",
+      "exif_iso": 160.0,
+      "exif_iso_source": "exif_ISOSpeedRatings",
+      "exif_f_number": 13.0,
+      "exif_f_number_source": "exif_f_number",
+      "exif_photometric_exposure_value": 0.00757396449704142,
+      "exif_focal_plane_x_resolution": null,
+      "exif_focal_plane_resolution_unit": null,
+      "focal_px": 5111.111111111111,
+      "focal_source": "exif_35mm_equivalent",
+      "pixel_pitch_mm": null,
+      "sensor_width_mm": 36.0,
+      "missing_standard_fields": []
+    },
+    "sharp_reference": {
+      "path": "sharp_1.jpg",
+      "width_px": 4000,
+      "height_px": 6000,
+      "make": "SONY",
+      "model": "ILCE-5100",
+      "lens_model": "E PZ 16-50mm F3.5-5.6 OSS",
+      "orientation": 8,
+      "datetime_original": "2026:03:28 15:58:16",
+      "exif_focal_mm": 31.0,
+      "exif_focal_35mm": 46.0,
+      "exif_exposure_s": 0.008,
+      "exif_exposure_source": "exif_exposure_time",
+      "exif_iso": 160.0,
+      "exif_iso_source": "exif_ISOSpeedRatings",
+      "exif_f_number": 13.0,
+      "exif_f_number_source": "exif_f_number",
+      "exif_photometric_exposure_value": 0.00757396449704142,
+      "exif_focal_plane_x_resolution": null,
+      "exif_focal_plane_resolution_unit": null,
+      "focal_px": 5111.111111111111,
+      "focal_source": "exif_35mm_equivalent",
+      "pixel_pitch_mm": null,
+      "sensor_width_mm": 36.0,
+      "missing_standard_fields": []
+    },
+    "comparison": {
+      "blurry_path": "pan_1.jpg",
+      "sharp_path": "sharp_1.jpg",
+      "fields": {
+        "focal_px": {
+          "blurry": 5111.111111111111,
+          "sharp": 5111.111111111111,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "exif_focal_mm": {
+          "blurry": 31.0,
+          "sharp": 31.0,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "exif_focal_35mm": {
+          "blurry": 46.0,
+          "sharp": 46.0,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "exif_exposure_s": {
+          "blurry": 0.008,
+          "sharp": 0.008,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "exif_iso": {
+          "blurry": 160.0,
+          "sharp": 160.0,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "exif_f_number": {
+          "blurry": 13.0,
+          "sharp": 13.0,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "exif_photometric_exposure_value": {
+          "blurry": 0.00757396449704142,
+          "sharp": 0.00757396449704142,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "sensor_width_mm": {
+          "blurry": 36.0,
+          "sharp": 36.0,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "width_px": {
+          "blurry": 4000,
+          "sharp": 4000,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        },
+        "height_px": {
+          "blurry": 6000,
+          "sharp": 6000,
+          "delta": 0.0,
+          "ratio_sharp_over_blurry": 1.0
+        }
+      },
+      "warnings": []
+    }
+  }
 }

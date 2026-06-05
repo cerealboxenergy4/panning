@@ -10,7 +10,7 @@ we can extract that kernel without any deconvolution.
 
 ---
 
-![Final speed estimation example](outputs/pan_2__sharp_2/final_result.png)
+![Final speed estimation example](outputs/pan_1__sharp_1/readme_banner.png)
 
 ## Pipeline Overview
 
@@ -18,7 +18,7 @@ we can extract that kernel without any deconvolution.
 pan_1.jpg
   │
   ├─[ Stage 1 ] pipeline/segment_car.py
-  │              Grounded SAM2 → car_mask.png
+  │              Grounded SAM2 → car_mask.png / track_mask.png
   │
   ├─[ Stage 2 ] pipeline/register_reference.py  +  sharp_1.jpg
   │              LoFTR/SIFT/ORB + RANSAC → sharp_registered.png
@@ -44,18 +44,22 @@ the pair directory.
 
 ## Stages
 
-### Stage 1 — Car Segmentation (`pipeline/segment_car.py`)
+### Stage 1 — Scene Segmentation (`pipeline/segment_car.py`)
 
-Isolates the F1 car so it is excluded from all background kernel estimates.
+Isolates the F1 car and the asphalt/track surface so both are excluded from background kernel estimates.
 
 - **Grounding DINO** (text-prompted open-vocabulary detector) produces bounding
   boxes from a natural-language prompt (`"formula 1 racing car . f1 car . race car ."`).
 - **SAM 2** refines those boxes into pixel-accurate instance masks.
+- A second open-vocabulary prompt segments asphalt/road/track surface into `track_mask.png`; Stage 3 treats this as an exclusion mask so road-plane patches do not bias kernel fitting.
 
 Outputs:
 - `outputs/pan_1__sharp_1/car_mask.png` — binary mask (255 = car, 0 = background)
-- `outputs/pan_1__sharp_1/car_detection.png` — overlay visualization
+- `outputs/pan_1__sharp_1/track_mask.png` — binary mask (255 = track/asphalt to exclude, 0 = other)
+- `outputs/pan_1__sharp_1/car_detection.png` — car overlay visualization
+- `outputs/pan_1__sharp_1/track_detection.png` — track/asphalt overlay visualization
 - `outputs/pan_1__sharp_1/car_detection.json` — GroundingDINO car boxes used as Stage 5 crop metadata
+- `outputs/pan_1__sharp_1/track_detection.json` — GroundingDINO track/asphalt boxes used for exclusion
 
 ```bash
 python pipeline/segment_car.py --image pan_1.jpg --out_dir outputs/pan_1__sharp_1
@@ -143,9 +147,7 @@ the uniform trajectory baseline both use `b_px_pixel`.
 The default pixel-domain comparison now uses `--photometric_mode robust_norm`,
 which normalizes each patch by robust median/percentile statistics before
 comparing candidate blur lengths. Other modes are available for ablations:
-`raw`, `patch_affine`, `global_affine`, `gradient`, and `exif_linear`. The
-`pan_2`/`sharp_2` comparison is logged in
-`reports/photometric_mitigation_pan_2_sharp_2.md`.
+`raw`, `patch_affine`, `global_affine`, `gradient`, and `exif_linear`.
 
 **Auxiliary estimate — spectral sinc² fit (`b_px_spec`)**
 
@@ -166,6 +168,7 @@ low-frequency weighting (higher SNR at low f). Stored in `kernel_map.npz` as
 | Filter | Criterion |
 |--------|-----------|
 | `skip_car` | patch car fraction > 10% |
+| `skip_excluded_region` | patch track/asphalt fraction > 25% |
 | `skip_invalid_region` | valid mask coverage < 95% |
 | `skip_flat_sharp` | Sobel energy in sharp patch < threshold (kernel underdetermined) |
 | `skip_low_texture` | gradient-magnitude variance < threshold |
@@ -179,7 +182,7 @@ confidence-weighted mean of all valid `b_px_pixel` estimates and applied to the
 `pan_1.jpg` without trajectory fitting.
 
 Outputs:
-- `outputs/pan_1__sharp_1/kernel_map.npz` — per-patch arrays: `b_px`, `b_px_spec`, `b_px_pixel`, `phi_deg`, `confidence`, texture metrics, `status`
+- `outputs/pan_1__sharp_1/kernel_map.npz` — per-patch arrays: `b_px`, `b_px_spec`, `b_px_pixel`, `phi_deg`, `confidence`, `car_frac`, `exclude_frac`, texture metrics, `status`
 - `outputs/pan_1__sharp_1/kernel_map.csv` — same as CSV
 - `outputs/pan_1__sharp_1/kernel_map.png` — overlay: arrows show blur direction, colour encodes `b_px_pixel`
 - `outputs/pan_1__sharp_1/kernel_patch_grid.png` — 8×6 diagnostic grid (4 near-mean + 4 outlier patches)
@@ -197,6 +200,8 @@ Key arguments:
 |----------|---------|-------------|
 | `--patch_size` | 400 | Patch edge length in pixels |
 | `--photometric_mode` | `robust_norm` | Intensity-mismatch mitigation: `raw`, `patch_affine`, `global_affine`, `robust_norm`, `gradient`, or `exif_linear` |
+| `--exclude_mask` | — | Optional binary mask for regions to exclude from kernel fitting, normally `track_mask.png` |
+| `--exclude_overlap_thres` | 0.25 | Max allowed fraction of a patch covered by the exclusion mask |
 | `--grad_energy_thres` | 100 | Min Sobel energy in sharp patch |
 | `--grad_var_thres` | 0 | Min gradient-magnitude variance; 0 disables |
 | `--harris_thres` | 0 | Min max Harris corner response; 0 disables |
@@ -358,7 +363,9 @@ Paths are relative to a run directory such as `outputs/pan_1__sharp_1/`.
 | File | Stage | Description |
 |------|-------|-------------|
 | `car_mask.png` | 1 | Binary car segmentation |
+| `track_mask.png` | 1 | Binary track/asphalt exclusion segmentation |
 | `car_detection.json` | 1 | GroundingDINO car boxes and selected crop bbox |
+| `track_detection.json` | 1 | GroundingDINO track/asphalt boxes used for exclusion |
 | `sharp_registered.png` | 2 | Sharp reference in blurry frame |
 | `sharp_registered_valid.png` | 2 | Registration coverage mask |
 | `kernel_map.npz` | 3 | Per-patch kernel estimates |

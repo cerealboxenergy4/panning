@@ -147,6 +147,19 @@ def main() -> int:
     parser.add_argument("--ransac_thresh", type=float, default=8.0, help="RANSAC threshold in px.")
     parser.add_argument("--patch_size", type=int, default=400, help="Kernel-estimation patch size.")
     parser.add_argument(
+        "--track_text_prompt",
+        default="asphalt . road surface . race track surface . track . pavement .",
+        help="GroundingDINO prompt for the track/asphalt exclusion mask.",
+    )
+    parser.add_argument("--track_box_threshold", type=float, default=0.15)
+    parser.add_argument("--track_text_threshold", type=float, default=0.15)
+    parser.add_argument(
+        "--track_overlap_thres",
+        type=float,
+        default=0.25,
+        help="Skip kernel patches if more than this fraction overlaps track_mask.png.",
+    )
+    parser.add_argument(
         "--grad_energy_thres",
         type=float,
         default=100.0,
@@ -227,6 +240,7 @@ def main() -> int:
     )
 
     car_mask = out_dir / "car_mask.png"
+    track_mask = out_dir / "track_mask.png"
     car_detection_json = out_dir / "car_detection.json"
     sharp_reg = out_dir / "sharp_registered.png"
     valid_mask = out_dir / "sharp_registered_valid.png"
@@ -238,7 +252,7 @@ def main() -> int:
     stages = [
         Stage(
             key="segment",
-            label="Stage 1: car segmentation",
+            label="Stage 1: scene segmentation",
             command=[
                 py,
                 str(script_dir / "segment_car.py"),
@@ -246,8 +260,21 @@ def main() -> int:
                 str(blurry),
                 "--out_dir",
                 str(out_dir),
+                "--track_text_prompt",
+                str(args.track_text_prompt),
+                "--track_box_threshold",
+                str(args.track_box_threshold),
+                "--track_text_threshold",
+                str(args.track_text_threshold),
             ],
-            outputs=[car_mask, out_dir / "car_detection.png", car_detection_json],
+            outputs=[
+                car_mask,
+                out_dir / "car_detection.png",
+                car_detection_json,
+                track_mask,
+                out_dir / "track_detection.png",
+                out_dir / "track_detection.json",
+            ],
         ),
         Stage(
             key="register",
@@ -331,6 +358,10 @@ def main() -> int:
                 str(car_mask),
                 "--valid_mask",
                 str(valid_mask),
+                "--exclude_mask",
+                str(track_mask),
+                "--exclude_overlap_thres",
+                str(args.track_overlap_thres),
                 "--out_dir",
                 str(out_dir),
                 "--patch_size",

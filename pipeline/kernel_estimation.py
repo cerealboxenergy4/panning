@@ -283,9 +283,11 @@ def photometric_exposure_ratio(blurry_meta, sharp_meta):
     return float(b_ev) / float(s_ev), 'exif_exposure_iso_aperture_ratio'
 
 
-def prepare_photometric_sharp(args, blur_gray, sharp_gray, car_mask, valid_mask):
+def prepare_photometric_sharp(args, blur_gray, sharp_gray, car_mask, valid_mask, exclude_mask=None):
     mode = args.photometric_mode
-    bg_mask = (~car_mask) & valid_mask
+    if exclude_mask is None:
+        exclude_mask = np.zeros_like(car_mask, dtype=bool)
+    bg_mask = (~car_mask) & (~exclude_mask) & valid_mask
     summary = {
         'mode': mode,
         'global_gain': 1.0,
@@ -363,6 +365,19 @@ def photometric_loss(blur_p, pred_p, mode):
     return float(np.mean((blur_p - pred_p) ** 2)), 1.0, 0.0
 
 
+def load_optional_binary_mask(path, shape, label):
+    if path is None:
+        return np.zeros(shape, dtype=bool), None
+    mask_path = Path(path)
+    if not mask_path.exists():
+        print(f"[warn] {label} mask {mask_path} not found — no {label} exclusion")
+        return np.zeros(shape, dtype=bool), None
+    mask = np.array(Image.open(mask_path).convert('L')) > 127
+    if mask.shape != shape:
+        raise ValueError(f"{label} mask shape {mask.shape} does not match image shape {shape}")
+    return mask, str(mask_path)
+
+
 def summarize_patch_losses(valid):
     vals = np.array([r.get('pixel_loss', np.nan) for r in valid], dtype=float)
     weights = np.array([max(float(r.get('confidence') or 0.0), 0.0) for r in valid], dtype=float)
@@ -391,6 +406,10 @@ def main():
                    help='Registered sharp image; defaults to <out_dir>/sharp_registered.png')
     p.add_argument('--car_mask', default=None,
                    help='Car mask path; defaults to <out_dir>/car_mask.png')
+    p.add_argument('--exclude_mask', default=None,
+                   help='Optional binary mask for background regions to exclude, e.g. track_mask.png')
+    p.add_argument('--exclude_overlap_thres', type=float, default=0.25,
+                   help='Skip patch if >this fraction overlaps the exclusion mask')
     p.add_argument('--patch_size', type=int, default=400)
     p.add_argument('--peak_thres', type=float, default=2.5,
                    help='Min peak/mean Sobel histogram ratio (direction confidence)')
@@ -431,6 +450,9 @@ def main():
     blur_rgb, blur_gray = load_gray_rgb(args.blurry)
     _, sharp_gray = load_gray_rgb(args.sharp_reg)
     car_mask = np.array(Image.open(args.car_mask).convert('L')) > 127
+    exclude_mask, exclude_mask_path = load_optional_binary_mask(
+        args.exclude_mask, blur_gray.shape, 'exclusion'
+    )
 
     valid_mask_path = Path(args.valid_mask)
     if valid_mask_path.exists():
@@ -440,8 +462,13 @@ def main():
         valid_mask = np.ones(blur_gray.shape, dtype=bool)
 
     sharp_gray_fit, photometric_summary = prepare_photometric_sharp(
-        args, blur_gray, sharp_gray, car_mask, valid_mask
+        args, blur_gray, sharp_gray, car_mask, valid_mask, exclude_mask
     )
+    photometric_summary.update({
+        'exclude_mask_path': exclude_mask_path,
+        'exclude_overlap_thres': float(args.exclude_overlap_thres),
+        'exclude_mask_fraction': float(exclude_mask.mean()),
+    })
     print(
         f"Photometric mode: {args.photometric_mode} "
         f"(global gain={photometric_summary['global_gain']:.4f}, "
@@ -459,7 +486,7 @@ def main():
         global_phi = args.global_phi
         print(f"Using supplied global blur direction: {global_phi:.2f}°")
     else:
-        bg_mask = ~car_mask  # exclude car gradients from the histogram
+        bg_mask = (~car_mask) & (~exclude_mask)  # exclude car and track/asphalt gradients
         global_phi, peak_score = estimate_blur_direction(blur_gray, weight_mask=bg_mask)
         if global_phi is None:
             raise ValueError("Could not estimate blur direction from full image.")
@@ -473,11 +500,12 @@ def main():
             blur_p  = blur_gray[y0:y0 + P, x0:x0 + P]
             sharp_p = sharp_gray_fit[y0:y0 + P, x0:x0 + P]
             car_p   = car_mask[y0:y0 + P, x0:x0 + P]
+            exclude_p = exclude_mask[y0:y0 + P, x0:x0 + P]
             valid_p = valid_mask[y0:y0 + P, x0:x0 + P]
 
             rec = dict(row=row, col=col, x0=x0, y0=y0,
                        cx=x0 + P / 2.0, cy=y0 + P / 2.0, patch_size=P,
-                       car_frac=float(car_p.mean()),
+                       car_frac=float(car_p.mean()), exclude_frac=float(exclude_p.mean()),
                        b_px=None, b_px_spec=None, b_px_pixel=None,
                        pixel_loss=None, loss_spec=None, loss_pixel=None,
                        photo_gain=None, photo_offset=None,
@@ -489,6 +517,13 @@ def main():
             # Skip car patches
             if rec['car_frac'] > args.car_overlap_thres:
                 rec['status'] = 'skip_car'
+                records.append(rec)
+                continue
+
+            # Skip segmented track/asphalt patches. These tend to be low-depth
+            # road-plane regions and can pull RANSAC toward a separate blur cluster.
+            if rec['exclude_frac'] > args.exclude_overlap_thres:
+                rec['status'] = 'skip_excluded_region'
                 records.append(rec)
                 continue
 
@@ -635,13 +670,14 @@ def main():
         texture_score=np.array([r['texture_score'] if r['texture_score'] is not None else 0.0
                                 for r in records]),
         car_frac=np.array([r['car_frac'] for r in records]),
+        exclude_frac=np.array([r['exclude_frac'] for r in records]),
         status=np.array([r['status'] for r in records]))
     print(f"Saved: {npz_path}")
 
     # ── Save CSV ──────────────────────────────────────────────────────────────
     csv_path = out_dir / 'kernel_map.csv'
     fields = ['row', 'col', 'x0', 'y0', 'cx', 'cy', 'patch_size',
-              'car_frac', 'grad_energy', 'grad_mag_var', 'grad_p95',
+              'car_frac', 'exclude_frac', 'grad_energy', 'grad_mag_var', 'grad_p95',
               'harris_max', 'harris_mean', 'texture_score',
               'b_px', 'b_px_spec', 'b_px_pixel', 'pixel_loss', 'loss_spec',
               'loss_pixel', 'photo_gain', 'photo_offset',
@@ -672,6 +708,7 @@ def main():
         'ok': 'white',
         'skip_car': 'red',
         'skip_invalid_region': 'magenta',
+        'skip_excluded_region': '#f2c94c',
         'skip_flat_sharp': '0.4',
         'skip_low_texture': '0.55',
         'skip_no_corner': 'cyan',

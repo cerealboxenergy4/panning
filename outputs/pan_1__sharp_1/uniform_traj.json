@@ -1,8 +1,9 @@
 {
-  "B_x_px": 139.42442259638653,
-  "B_y_px": 0.6083576687617853,
-  "b_total_px": 139.42574982903596,
+  "B_x_px": 125.79568744796642,
+  "B_y_px": 0.5488907160668021,
+  "b_total_px": 125.79688494364493,
   "phi_deg": 0.25,
   "n_patches_used": 49,
-  "method": "uniform_kernel_weighted_mean"
+  "method": "uniform_kernel_weighted_mean",
+  "photometric_mode": "robust_norm"
 }

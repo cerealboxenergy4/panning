@@ -105,6 +105,13 @@ def main() -> int:
     parser.add_argument('--stop-after', choices=STAGE_KEYS, default='speed')
 
     parser.add_argument('--patch_size', type=int, default=400)
+    parser.add_argument('--track_text_prompt',
+                        default='asphalt . road surface . race track surface . track . pavement .',
+                        help='GroundingDINO prompt for the track/asphalt exclusion mask.')
+    parser.add_argument('--track_box_threshold', type=float, default=0.15)
+    parser.add_argument('--track_text_threshold', type=float, default=0.15)
+    parser.add_argument('--track_overlap_thres', type=float, default=0.25,
+                        help='Skip kernel patches if more than this fraction overlaps track_mask.png.')
     parser.add_argument('--grad_energy_thres', type=float, default=100.0)
     parser.add_argument('--grad_var_thres', type=float, default=0.0)
     parser.add_argument('--harris_thres', type=float, default=0.0)
@@ -152,6 +159,7 @@ def main() -> int:
     )
 
     car_mask = out_dir / 'car_mask.png'
+    track_mask = out_dir / 'track_mask.png'
     car_detection_json = out_dir / 'car_detection.json'
     kernel_map = out_dir / 'kernel_map.npz'
     trajectory_json = out_dir / 'trajectory.json'
@@ -161,9 +169,23 @@ def main() -> int:
     stages = [
         Stage(
             key='segment',
-            label='Stage 1: car segmentation',
-            command=[py, str(script_dir / 'segment_car.py'), '--image', str(blurry), '--out_dir', str(out_dir)],
-            outputs=[car_mask, out_dir / 'car_detection.png', car_detection_json],
+            label='Stage 1: scene segmentation',
+            command=[
+                py, str(script_dir / 'segment_car.py'),
+                '--image', str(blurry),
+                '--out_dir', str(out_dir),
+                '--track_text_prompt', str(args.track_text_prompt),
+                '--track_box_threshold', str(args.track_box_threshold),
+                '--track_text_threshold', str(args.track_text_threshold),
+            ],
+            outputs=[
+                car_mask,
+                out_dir / 'car_detection.png',
+                car_detection_json,
+                track_mask,
+                out_dir / 'track_detection.png',
+                out_dir / 'track_detection.json',
+            ],
         ),
         Stage(
             key='kernel',
@@ -172,6 +194,8 @@ def main() -> int:
                 py, str(script_dir / 'blind_kernel_estimation.py'),
                 '--blurry', str(blurry),
                 '--car_mask', str(car_mask),
+                '--exclude_mask', str(track_mask),
+                '--exclude_overlap_thres', str(args.track_overlap_thres),
                 '--out_dir', str(out_dir),
                 '--patch_size', str(args.patch_size),
                 '--grad_energy_thres', str(args.grad_energy_thres),
